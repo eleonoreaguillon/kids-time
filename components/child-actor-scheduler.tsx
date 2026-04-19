@@ -288,7 +288,7 @@ function AuthPage({ onAuth }: { onAuth: (s: any) => void }) {
         </h1>
         <div className="mt-6 max-w-sm mx-auto text-slate-400 text-sm leading-relaxed border-t border-slate-800 pt-5">
           Bonjour et bienvenue sur cet outil de travail dédié aux coachs et aux responsables enfants qui exercent dans l&apos;audiovisuel.
-          <div className="mt-3 text-blue-400 font-semibold text-xs tracking-wider">Éléonore Aguillon · ACMA Fiction</div>
+          <div className="mt-3 text-blue-400 font-semibold text-xs tracking-wider">Outils créée par Éléonore Aguillon · ACMA Fiction</div>
         </div>
       </div>
 
