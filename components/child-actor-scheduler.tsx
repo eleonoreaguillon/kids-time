@@ -287,7 +287,7 @@ function AuthPage({ onAuth }: { onAuth: (s: any) => void }) {
           KIDS<span className="text-blue-500">TIME</span>
         </h1>
         <div className="mt-6 max-w-sm mx-auto text-slate-400 text-sm leading-relaxed border-t border-slate-800 pt-5">
-          Outil développé par Éléonore Aguillon 
+          Outil développé par Éléonore Aguillon
           <div className="mt-3 text-blue-400 font-semibold text-xs tracking-wider">Bonjour et bienvenue sur cet outil de travail dédié aux coachs et aux responsables enfants qui exercent dans l&apos;audiovisuel.</div>
         </div>
       </div>
