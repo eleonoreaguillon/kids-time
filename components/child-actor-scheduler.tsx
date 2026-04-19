@@ -284,7 +284,7 @@ function AuthPage({ onAuth }: { onAuth: (s: any) => void }) {
       <div className="relative z-10 mb-10 text-center">
         <div className="text-[10px] text-blue-400 tracking-[0.4em] uppercase mb-2">Audiovisuel · Mineurs</div>
         <h1 className="text-6xl font-extrabold tracking-tight" style={{ fontFamily: "Syne, sans-serif" }}>
-          JUNIOR<span className="text-blue-500">CALL</span>
+          KIDS<span className="text-blue-500">TIME</span>
         </h1>
         <div className="mt-6 max-w-sm mx-auto text-slate-400 text-sm leading-relaxed border-t border-slate-800 pt-5">
           Outil développé par Éléonore Aguillon · ACMA Fiction
