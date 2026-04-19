@@ -508,7 +508,7 @@ function HomeView({ projects, userEmail, onCreate, onOpen, onDelete, onSignOut }
         <div className="flex items-start justify-between mb-12">
           <div>
             <div className="text-[10px] text-blue-400 tracking-[0.35em] uppercase mb-2">Gestion des mineurs · Audiovisuel</div>
-            <h1 className="text-5xl font-extrabold tracking-tight" style={{ fontFamily: "Syne, sans-serif" }}>JUNIOR<span className="text-blue-500">CALL</span></h1>
+            <h1 className="text-5xl font-extrabold tracking-tight" style={{ fontFamily: "Syne, sans-serif" }}>KIDS<span className="text-blue-500">TIME</span></h1>
           </div>
           <div className="text-right mt-2">
             <div className="text-xs text-slate-500 mb-1">{userEmail}</div>
