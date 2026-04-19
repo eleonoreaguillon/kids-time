@@ -287,7 +287,7 @@ function AuthPage({ onAuth }: { onAuth: (s: any) => void }) {
           JUNIOR<span className="text-blue-500">CALL</span>
         </h1>
         <div className="mt-6 max-w-sm mx-auto text-slate-400 text-sm leading-relaxed border-t border-slate-800 pt-5">
-          Outils créé par Éléonore Aguillon · ACMA Fiction
+          Outil développé par Éléonore Aguillon · ACMA Fiction
           <div className="mt-3 text-blue-400 font-semibold text-xs tracking-wider">Bonjour et bienvenue sur cet outil de travail dédié aux coachs et aux responsables enfants qui exercent dans l&apos;audiovisuel.</div>
         </div>
       </div>
