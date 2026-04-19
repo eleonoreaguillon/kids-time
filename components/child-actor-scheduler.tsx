@@ -1,9 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 
-// ─── Supabase ────────────────────────────────────────────────────────────────
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -76,6 +75,7 @@ interface SessionStats {
   timeSinceBreak: number | null;
   start: Date;
   now: Date;
+  breakSlots: { start: string; end: string; durationMin: number; valid: boolean }[];
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -148,25 +148,32 @@ function isoToTimeStr(iso: string | undefined): string {
 
 function computeSessionStats(session: Session | undefined, rules: Rules): SessionStats | null {
   if (!session?.start_time) return null;
-  const now  = session.end_time ? new Date(session.end_time) : new Date();
+  const now   = session.end_time ? new Date(session.end_time) : new Date();
   const start = new Date(session.start_time);
   const amplitudeMin = Math.floor((now.getTime() - start.getTime()) / 60000);
   const events = session.events || [];
   let workMin = 0, breakMin = 0, validBreakMin = 0, lastRef = start;
+  const breakSlots: SessionStats["breakSlots"] = [];
 
   for (const ev of events) {
     const t = new Date(ev.time), dur = Math.floor((t.getTime() - lastRef.getTime()) / 60000);
-    if (ev.type === "pause_start") { workMin += dur; }
-    else if (ev.type === "pause_end") {
-      if (dur >= rules.minBreakMinutes) validBreakMin += dur; else workMin += dur;
+    if (ev.type === "pause_start") {
+      workMin += dur;
+      lastRef = t;
+    } else if (ev.type === "pause_end") {
+      const valid = dur >= rules.minBreakMinutes;
+      breakSlots.push({ start: lastRef.toISOString(), end: t.toISOString(), durationMin: dur, valid });
+      if (valid) validBreakMin += dur; else workMin += dur;
       breakMin += dur;
+      lastRef = t;
     }
-    lastRef = t;
   }
 
   const lastDur = Math.floor((now.getTime() - lastRef.getTime()) / 60000);
   if (session.status === "paused") {
-    if (lastDur >= rules.minBreakMinutes) validBreakMin += lastDur; else workMin += lastDur;
+    const valid = lastDur >= rules.minBreakMinutes;
+    breakSlots.push({ start: lastRef.toISOString(), end: now.toISOString(), durationMin: lastDur, valid });
+    if (valid) validBreakMin += lastDur; else workMin += lastDur;
     breakMin += lastDur;
   } else { workMin += lastDur; }
 
@@ -176,7 +183,168 @@ function computeSessionStats(session: Session | undefined, rules: Rules): Sessio
     timeSinceBreak = Math.floor((now.getTime() - new Date(last ? last.time : session.start_time).getTime()) / 60000);
   }
 
-  return { amplitudeMin, workMin, breakMin, validBreakMin, timeSinceBreak, start, now };
+  return { amplitudeMin, workMin, breakMin, validBreakMin, timeSinceBreak, start, now, breakSlots };
+}
+
+// ─── Export helpers ───────────────────────────────────────────────────────────
+function exportDayToXLSX(project: Project, dateStr: string) {
+  const day = project.shootingDays[dateStr];
+  if (!day) return;
+  const rows: any[] = [];
+  for (const childId of day.child_ids || []) {
+    const child = project.children.find(c => c.id === childId);
+    if (!child) continue;
+    const session = day.sessions?.[childId];
+    const vacation = isVacation(child, dateStr);
+    const band = getAgeBand(child.dob);
+    const period: Period = vacation ? "vacation" : "school";
+    const maxWork = project.rules.maxWorkMinutes[band][period];
+    const maxAmp  = project.rules.maxAmplitudeMinutes;
+    const stats   = computeSessionStats(session, project.rules);
+
+    const breakSlotsStr = stats?.breakSlots.map(b => `${formatTime(b.start)}-${formatTime(b.end)} (${formatMinutes(b.durationMin)}${b.valid ? "" : " ⚠non valide"})`).join(" / ") || "--";
+    const workOver  = stats ? Math.max(0, stats.workMin - maxWork) : 0;
+    const ampOver   = stats ? Math.max(0, stats.amplitudeMin - maxAmp) : 0;
+
+    rows.push({
+      "Nom":                               `${child.last_name} ${child.first_name}`,
+      "Date de naissance":                 child.dob,
+      "Tranche d'âge":                     band,
+      "Période":                           vacation ? "Vacances" : "Scolaire",
+      "Heure de convocation":              session?.start_time ? formatTime(session.start_time) : "--",
+      "Heure de fin":                      session?.end_time ? formatTime(session.end_time) : "--",
+      "Durée totale de travail":           stats ? formatMinutes(stats.workMin) : "--",
+      "Temps de travail autorisé":         formatMinutes(maxWork),
+      "Dépassement travail":               workOver > 0 ? formatMinutes(workOver) : "0",
+      "Durée totale des pauses":           stats ? formatMinutes(stats.breakMin) : "--",
+      "Pauses valides":                    stats ? formatMinutes(stats.validBreakMin) : "--",
+      "Plages horaires des pauses":        breakSlotsStr,
+      "Amplitude de présence":             stats ? formatMinutes(stats.amplitudeMin) : "--",
+      "Amplitude autorisée":               formatMinutes(maxAmp),
+      "Dépassement amplitude":             ampOver > 0 ? formatMinutes(ampOver) : "0",
+    });
+  }
+
+  // Build CSV (universal fallback — works without external lib)
+  const headers = Object.keys(rows[0] || {});
+  const csv = [
+    headers.join(";"),
+    ...rows.map(r => headers.map(h => `"${String(r[h] || "").replace(/"/g, '""')}"`).join(";")),
+  ].join("\n");
+
+  // Try to use SheetJS if available, otherwise CSV
+  if (typeof window !== "undefined" && (window as any).XLSX) {
+    const XLSX = (window as any).XLSX;
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Récapitulatif");
+    XLSX.writeFile(wb, `KidsTime_${dateStr}_${project.name}.xlsx`);
+  } else {
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href = url; a.download = `KidsTime_${dateStr}_${project.name}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  }
+}
+
+function exportDayToPDF(project: Project, dateStr: string) {
+  const day = project.shootingDays[dateStr];
+  if (!day) return;
+  const dateLabel = new Date(dateStr + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+
+  let html = `
+  <html><head><meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; font-size: 11px; color: #111; padding: 20px; }
+    h1 { font-size: 18px; margin-bottom: 4px; }
+    h2 { font-size: 13px; color: #444; margin-bottom: 16px; font-weight: normal; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
+    th { background: #1e3a5f; color: white; padding: 7px 8px; text-align: left; font-size: 10px; }
+    td { padding: 6px 8px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
+    tr:nth-child(even) td { background: #f8fafc; }
+    .over { color: #dc2626; font-weight: bold; }
+    .ok { color: #16a34a; }
+    .section { margin-bottom: 6px; font-weight: bold; font-size: 12px; color: #1e3a5f; border-bottom: 2px solid #1e3a5f; padding-bottom: 4px; margin-top: 20px; }
+    .footer { margin-top: 30px; font-size: 9px; color: #999; text-align: center; }
+  </style></head><body>
+  <h1>KidsTime — Récapitulatif journée</h1>
+  <h2>${dateLabel} &nbsp;·&nbsp; ${project.name}</h2>
+  <div class="section">Détail par enfant</div>
+  `;
+
+  for (const childId of day.child_ids || []) {
+    const child = project.children.find(c => c.id === childId);
+    if (!child) continue;
+    const session = day.sessions?.[childId];
+    const vacation = isVacation(child, dateStr);
+    const band = getAgeBand(child.dob);
+    const period: Period = vacation ? "vacation" : "school";
+    const maxWork = project.rules.maxWorkMinutes[band][period];
+    const maxAmp  = project.rules.maxAmplitudeMinutes;
+    const stats   = computeSessionStats(session, project.rules);
+    const workOver = stats ? Math.max(0, stats.workMin - maxWork) : 0;
+    const ampOver  = stats ? Math.max(0, stats.amplitudeMin - maxAmp) : 0;
+    const breakSlotsStr = stats?.breakSlots.map(b => `${formatTime(b.start)}-${formatTime(b.end)} (${formatMinutes(b.durationMin)}${b.valid ? "" : " ⚠"})`).join("<br>") || "--";
+
+    html += `
+    <table>
+      <tr><th colspan="4">${child.last_name} ${child.first_name} — ${getAge(child.dob)} ans (${band} ans) — ${vacation ? "🌴 Vacances" : "🏫 Scolaire"}</th></tr>
+      <tr>
+        <td><b>Heure de convocation</b><br>${session?.start_time ? formatTime(session.start_time) : "--"}</td>
+        <td><b>Heure de fin</b><br>${session?.end_time ? formatTime(session.end_time) : "--"}</td>
+        <td><b>Amplitude de présence</b><br>${stats ? formatMinutes(stats.amplitudeMin) : "--"}</td>
+        <td><b>Amplitude autorisée</b><br>${formatMinutes(maxAmp)}</td>
+      </tr>
+      <tr>
+        <td><b>Durée totale de travail</b><br>${stats ? formatMinutes(stats.workMin) : "--"}</td>
+        <td><b>Temps autorisé</b><br>${formatMinutes(maxWork)}</td>
+        <td><b>Dépassement travail</b><br><span class="${workOver > 0 ? "over" : "ok"}">${workOver > 0 ? formatMinutes(workOver) : "✓ OK"}</span></td>
+        <td><b>Dépassement amplitude</b><br><span class="${ampOver > 0 ? "over" : "ok"}">${ampOver > 0 ? formatMinutes(ampOver) : "✓ OK"}</span></td>
+      </tr>
+      <tr>
+        <td><b>Durée totale des pauses</b><br>${stats ? formatMinutes(stats.breakMin) : "--"}</td>
+        <td><b>Pauses valides</b><br>${stats ? formatMinutes(stats.validBreakMin) : "--"}</td>
+        <td colspan="2"><b>Plages horaires des pauses</b><br>${breakSlotsStr}</td>
+      </tr>
+    </table>`;
+  }
+
+  html += `<div class="footer">Généré par KidsTime · Éléonore Aguillon · ACMA Fiction · ${new Date().toLocaleDateString("fr-FR")}</div></body></html>`;
+
+  const w = window.open("", "_blank");
+  if (w) { w.document.write(html); w.document.close(); setTimeout(() => w.print(), 500); }
+}
+
+// ─── Excel import helper ──────────────────────────────────────────────────────
+function parseExcelDate(val: any): string {
+  if (!val) return "";
+  if (typeof val === "number") {
+    // Excel serial date
+    const d = new Date((val - 25569) * 86400 * 1000);
+    return d.toISOString().slice(0, 10);
+  }
+  if (typeof val === "string") {
+    // Try dd/mm/yyyy or yyyy-mm-dd
+    const parts = val.includes("/") ? val.split("/").reverse() : val.split("-");
+    if (parts.length === 3) {
+      const [y, m, d] = parts.map(Number);
+      if (y > 1900) return `${y}-${String(m).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+    }
+    const parsed = new Date(val);
+    if (!isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+  }
+  return "";
+}
+
+function guessColumn(headers: string[], candidates: string[]): string | null {
+  const h = headers.map(x => x?.toLowerCase().trim().normalize("NFD").replace(/[\u0300-\u036f]/g,""));
+  const c = candidates.map(x => x.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,""));
+  for (const cand of c) {
+    const idx = h.findIndex(x => x.includes(cand) || cand.includes(x));
+    if (idx !== -1) return headers[idx];
+  }
+  return null;
 }
 
 // ─── UI Primitives ────────────────────────────────────────────────────────────
@@ -253,10 +421,10 @@ export default function App() {
 // AUTH PAGE
 // ═════════════════════════════════════════════════════════════════════════════
 function AuthPage({ onAuth }: { onAuth: (s: any) => void }) {
-  const [mode, setMode]     = useState<"login" | "signup">("login");
-  const [email, setEmail]   = useState("");
-  const [pass, setPass]     = useState("");
-  const [error, setError]   = useState("");
+  const [mode, setMode]       = useState<"login" | "signup">("login");
+  const [email, setEmail]     = useState("");
+  const [pass, setPass]       = useState("");
+  const [error, setError]     = useState("");
   const [loading, setLoading] = useState(false);
 
   async function submit(e: React.FormEvent) {
@@ -280,18 +448,16 @@ function AuthPage({ onAuth }: { onAuth: (s: any) => void }) {
     <div className="min-h-screen bg-[#080d16] flex flex-col items-center justify-center px-4" style={{ fontFamily: "'DM Mono', monospace" }}>
       <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@700;800&display=swap" rel="stylesheet" />
       <div className="fixed inset-0 opacity-[0.025]" style={{ backgroundImage: "linear-gradient(#fff 1px,transparent 1px),linear-gradient(90deg,#fff 1px,transparent 1px)", backgroundSize: "40px 40px" }} />
-
       <div className="relative z-10 mb-10 text-center">
         <div className="text-[10px] text-blue-400 tracking-[0.4em] uppercase mb-2">Audiovisuel · Mineurs</div>
         <h1 className="text-6xl font-extrabold tracking-tight" style={{ fontFamily: "Syne, sans-serif" }}>
-          KIDS<span className="text-blue-500">TIME</span>
+          <span className="text-white">KIDS</span><span className="text-blue-500">TIME</span>
         </h1>
         <div className="mt-6 max-w-sm mx-auto text-slate-400 text-sm leading-relaxed border-t border-slate-800 pt-5">
-          Outil développé par Éléonore Aguillon
-          <div className="mt-3 text-blue-400 font-semibold text-xs tracking-wider">Bonjour et bienvenue sur cet outil de travail dédié aux coachs et aux responsables enfants qui exercent dans l&apos;audiovisuel.</div>
+          Bonjour et bienvenue sur cet outil de travail dédié aux coachs et aux responsables enfants qui exercent dans l&apos;audiovisuel.
+          <div className="mt-3 text-blue-400 font-semibold text-xs tracking-wider">Éléonore Aguillon · ACMA Fiction</div>
         </div>
       </div>
-
       <div className="relative z-10 w-full max-w-sm bg-slate-900/70 border border-slate-700 rounded-2xl p-7 backdrop-blur">
         <div className="flex mb-6 bg-slate-800 rounded-xl p-1">
           {(["login", "signup"] as const).map(m => (
@@ -318,11 +484,11 @@ function AuthPage({ onAuth }: { onAuth: (s: any) => void }) {
 // MAIN APP
 // ═════════════════════════════════════════════════════════════════════════════
 function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }) {
-  const [view, setView]           = useState<"home" | "project" | "shooting">("home");
-  const [projects, setProjects]   = useState<Project[]>([]);
+  const [view, setView]             = useState<"home" | "project" | "shooting">("home");
+  const [projects, setProjects]     = useState<Project[]>([]);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [activeDate, setActiveDate] = useState<string | null>(null);
-  const [loading, setLoading]     = useState(true);
+  const [loading, setLoading]       = useState(true);
   const userId = session.user.id;
 
   const loadProjects = useCallback(async () => {
@@ -370,6 +536,12 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
 
   async function addChild(child: { firstName: string; lastName: string; dob: string; vacationPeriods: VacationPeriod[] }) {
     await supabase.from("children").insert({ project_id: activeProject!.id, first_name: child.firstName, last_name: child.lastName, dob: child.dob, vacation_periods: child.vacationPeriods || [] });
+    refreshActive();
+  }
+
+  async function addChildren(children: { firstName: string; lastName: string; dob: string; vacationPeriods: VacationPeriod[] }[]) {
+    const rows = children.map(c => ({ project_id: activeProject!.id, first_name: c.firstName, last_name: c.lastName, dob: c.dob, vacation_periods: c.vacationPeriods || [] }));
+    await supabase.from("children").insert(rows);
     refreshActive();
   }
 
@@ -440,6 +612,13 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     await updateDaySessions(dateStr, sessions);
   }
 
+  async function cancelSession(dateStr: string, childId: string) {
+    const day = activeProject!.shootingDays[dateStr]; if (!day) return;
+    const sessions = { ...(day.sessions || {}) };
+    delete sessions[childId];
+    await updateDaySessions(dateStr, sessions);
+  }
+
   async function applyEventToChildren(dateStr: string, childIds: string[], eventType: "pause_start" | "pause_end", timeISO?: string) {
     const day = activeProject!.shootingDays[dateStr]; if (!day) return;
     const sessions = { ...(day.sessions || {}) };
@@ -453,6 +632,21 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     await updateDaySessions(dateStr, sessions);
   }
 
+  async function cancelLastEvent(dateStr: string, childId: string) {
+    const day = activeProject!.shootingDays[dateStr]; if (!day) return;
+    const sessions = { ...(day.sessions || {}) };
+    const s = { ...sessions[childId] };
+    if (!s?.events?.length) return;
+    const events = [...s.events];
+    events.pop();
+    // recalculate status
+    const lastEv = events[events.length - 1];
+    let status: Session["status"] = "working";
+    if (lastEv?.type === "pause_start") status = "paused";
+    sessions[childId] = { ...s, events, status, end_time: undefined };
+    await updateDaySessions(dateStr, sessions);
+  }
+
   async function endSessions(dateStr: string, childIds: string[], timeISO?: string) {
     const day = activeProject!.shootingDays[dateStr]; if (!day) return;
     const sessions = { ...(day.sessions || {}) };
@@ -462,6 +656,13 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
       if (s.status === "paused") events.push({ type: "pause_end", time: timeISO || nowISO() });
       sessions[childId] = { ...s, end_time: timeISO || nowISO(), status: "done", events };
     }
+    await updateDaySessions(dateStr, sessions);
+  }
+
+  async function reopenSession(dateStr: string, childId: string) {
+    const day = activeProject!.shootingDays[dateStr]; if (!day) return;
+    const sessions = { ...(day.sessions || {}) };
+    sessions[childId] = { ...sessions[childId], status: "working", end_time: undefined };
     await updateDaySessions(dateStr, sessions);
   }
 
@@ -482,6 +683,13 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     await updateDaySessions(dateStr, sessions);
   }
 
+  async function editEndTime(dateStr: string, childId: string, newTimeISO: string) {
+    const day = activeProject!.shootingDays[dateStr]; if (!day) return;
+    const sessions = { ...(day.sessions || {}) };
+    sessions[childId] = { ...sessions[childId], end_time: newTimeISO };
+    await updateDaySessions(dateStr, sessions);
+  }
+
   const Fonts = () => <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@700;800&display=swap" rel="stylesheet" />;
 
   if (loading && view === "home") return (
@@ -491,8 +699,8 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
   );
 
   if (view === "home") return <><Fonts /><HomeView projects={projects} userEmail={session.user.email} onCreate={createProject} onOpen={openProject} onDelete={deleteProject} onSignOut={onSignOut} /></>;
-  if (view === "project" && activeProject) return <><Fonts /><ProjectView project={activeProject} onBack={() => { setView("home"); loadProjects(); }} onAddChild={addChild} onUpdateChild={updateChild} onRemoveChild={removeChild} onAddGroup={addGroup} onUpdateGroup={updateGroup} onRemoveGroup={removeGroup} onUpdateRules={updateRules} onOpenDay={date => { setActiveDate(date); setView("shooting"); }} /></>;
-  if (view === "shooting" && activeProject && activeDate) return <><Fonts /><ShootingView project={activeProject} dateStr={activeDate} onBack={() => { setView("project"); refreshActive(); }} onStartSession={(cid, t) => startSession(activeDate, cid, t)} onApplyEvent={(cids, type, t) => applyEventToChildren(activeDate, cids, type, t)} onEndSessions={(cids, t) => endSessions(activeDate, cids, t)} onToggleChild={cid => toggleChildOnDay(activeDate, cid)} onAddGroup={gid => addGroupToDay(activeDate, gid)} onEditEventTime={(cid, idx, t) => editEventTime(activeDate, cid, idx, t)} onEditStartTime={(cid, t) => editStartTime(activeDate, cid, t)} /></>;
+  if (view === "project" && activeProject) return <><Fonts /><ProjectView project={activeProject} onBack={() => { setView("home"); loadProjects(); }} onAddChild={addChild} onAddChildren={addChildren} onUpdateChild={updateChild} onRemoveChild={removeChild} onAddGroup={addGroup} onUpdateGroup={updateGroup} onRemoveGroup={removeGroup} onUpdateRules={updateRules} onOpenDay={date => { setActiveDate(date); setView("shooting"); }} /></>;
+  if (view === "shooting" && activeProject && activeDate) return <><Fonts /><ShootingView project={activeProject} dateStr={activeDate} onBack={() => { setView("project"); refreshActive(); }} onStartSession={(cid, t) => startSession(activeDate, cid, t)} onCancelSession={cid => cancelSession(activeDate, cid)} onApplyEvent={(cids, type, t) => applyEventToChildren(activeDate, cids, type, t)} onCancelLastEvent={cid => cancelLastEvent(activeDate, cid)} onEndSessions={(cids, t) => endSessions(activeDate, cids, t)} onReopenSession={cid => reopenSession(activeDate, cid)} onToggleChild={cid => toggleChildOnDay(activeDate, cid)} onAddGroup={gid => addGroupToDay(activeDate, gid)} onEditEventTime={(cid, idx, t) => editEventTime(activeDate, cid, idx, t)} onEditStartTime={(cid, t) => editStartTime(activeDate, cid, t)} onEditEndTime={(cid, t) => editEndTime(activeDate, cid, t)} onExportXLSX={() => exportDayToXLSX(activeProject, activeDate)} onExportPDF={() => exportDayToPDF(activeProject, activeDate)} /></>;
   return null;
 }
 
@@ -508,7 +716,7 @@ function HomeView({ projects, userEmail, onCreate, onOpen, onDelete, onSignOut }
         <div className="flex items-start justify-between mb-12">
           <div>
             <div className="text-[10px] text-blue-400 tracking-[0.35em] uppercase mb-2">Gestion des mineurs · Audiovisuel</div>
-            <h1 className="text-5xl font-extrabold tracking-tight" style={{ fontFamily: "Syne, sans-serif" }}>KIDS<span className="text-blue-500">TIME</span></h1>
+            <h1 className="text-5xl font-extrabold tracking-tight" style={{ fontFamily: "Syne, sans-serif" }}><span className="text-white">KIDS</span><span className="text-blue-500">TIME</span></h1>
           </div>
           <div className="text-right mt-2">
             <div className="text-xs text-slate-500 mb-1">{userEmail}</div>
@@ -547,9 +755,10 @@ function HomeView({ projects, userEmail, onCreate, onOpen, onDelete, onSignOut }
 // ═════════════════════════════════════════════════════════════════════════════
 // PROJECT VIEW
 // ═════════════════════════════════════════════════════════════════════════════
-function ProjectView({ project, onBack, onAddChild, onUpdateChild, onRemoveChild, onAddGroup, onUpdateGroup, onRemoveGroup, onUpdateRules, onOpenDay }: {
+function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild, onRemoveChild, onAddGroup, onUpdateGroup, onRemoveGroup, onUpdateRules, onOpenDay }: {
   project: Project; onBack: () => void;
-  onAddChild: (c: any) => void; onUpdateChild: (id: string, d: any) => void; onRemoveChild: (id: string) => void;
+  onAddChild: (c: any) => void; onAddChildren: (cs: any[]) => void;
+  onUpdateChild: (id: string, d: any) => void; onRemoveChild: (id: string) => void;
   onAddGroup: (name: string) => void; onUpdateGroup: (id: string, d: any) => void; onRemoveGroup: (id: string) => void;
   onUpdateRules: (fn: (r: Rules) => Rules) => void; onOpenDay: (date: string) => void;
 }) {
@@ -571,28 +780,25 @@ function ProjectView({ project, onBack, onAddChild, onUpdateChild, onRemoveChild
       </div>
       <div className="max-w-4xl mx-auto px-6 py-8">
         {tab === "calendar" && <CalendarTab project={project} onOpenDay={onOpenDay} />}
-        {tab === "children" && <ChildrenTab project={project} onAdd={() => setChildModal("new")} onEdit={c => setChildModal(c)} onRemove={onRemoveChild} />}
+        {tab === "children" && <ChildrenTab project={project} onAdd={() => setChildModal("new")} onEdit={c => setChildModal(c)} onRemove={onRemoveChild} onImport={onAddChildren} />}
         {tab === "groups"   && <GroupsTab project={project} onAdd={() => setGroupModal("new")} onRemove={onRemoveGroup} onUpdateGroup={onUpdateGroup} />}
         {tab === "settings" && <SettingsTab rules={project.rules} onUpdateRules={onUpdateRules} />}
       </div>
       {childModal !== null && (
-        <ChildFormModal
-          child={childModal === "new" ? null : childModal}
+        <ChildFormModal child={childModal === "new" ? null : childModal}
           onSave={data => { childModal === "new" ? onAddChild(data) : onUpdateChild((childModal as Child).id, data); setChildModal(null); }}
-          onClose={() => setChildModal(null)}
-        />
+          onClose={() => setChildModal(null)} />
       )}
       {groupModal !== null && (
-        <GroupFormModal
-          group={groupModal === "new" ? null : groupModal}
+        <GroupFormModal group={groupModal === "new" ? null : groupModal}
           onSave={name => { groupModal === "new" ? onAddGroup(name) : onUpdateGroup((groupModal as Group).id, { name }); setGroupModal(null); }}
-          onClose={() => setGroupModal(null)}
-        />
+          onClose={() => setGroupModal(null)} />
       )}
     </div>
   );
 }
 
+// ─── Calendar Tab ─────────────────────────────────────────────────────────────
 function CalendarTab({ project, onOpenDay }: { project: Project; onOpenDay: (d: string) => void }) {
   const [cur, setCur] = useState(() => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), 1); });
   const y = cur.getFullYear(), m = cur.getMonth();
@@ -624,13 +830,119 @@ function CalendarTab({ project, onOpenDay }: { project: Project; onOpenDay: (d: 
   );
 }
 
-function ChildrenTab({ project, onAdd, onEdit, onRemove }: { project: Project; onAdd: () => void; onEdit: (c: Child) => void; onRemove: (id: string) => void }) {
+// ─── Children Tab (with import) ───────────────────────────────────────────────
+function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport }: { project: Project; onAdd: () => void; onEdit: (c: Child) => void; onRemove: (id: string) => void; onImport: (cs: any[]) => void }) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [importMsg, setImportMsg] = useState("");
+  const [importPreview, setImportPreview] = useState<any[]>([]);
+  const [showPreview, setShowPreview] = useState(false);
+
+  function downloadTemplate() {
+    const csv = "Prénom;Nom;Date de naissance (JJ/MM/AAAA);Début vacances (JJ/MM/AAAA);Fin vacances (JJ/MM/AAAA)\nLéa;Martin;15/03/2015;01/07/2025;31/08/2025\n";
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a"); a.href = url; a.download = "modele_enfants_kidstime.csv"; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]; if (!file) return;
+    setImportMsg("Lecture du fichier…");
+
+    try {
+      let rows: any[] = [];
+
+      if (file.name.endsWith(".csv") || file.name.endsWith(".txt")) {
+        const text = await file.text();
+        const lines = text.split(/\r?\n/).filter(l => l.trim());
+        const sep = lines[0].includes(";") ? ";" : ",";
+        const headers = lines[0].split(sep).map(h => h.trim().replace(/^"|"$/g, ""));
+        for (let i = 1; i < lines.length; i++) {
+          const vals = lines[i].split(sep).map(v => v.trim().replace(/^"|"$/g, ""));
+          const row: any = {};
+          headers.forEach((h, idx) => { row[h] = vals[idx] || ""; });
+          rows.push(row);
+        }
+      } else {
+        // XLSX — load SheetJS dynamically
+        const XLSX = await import("xlsx");
+        const buf  = await file.arrayBuffer();
+        const wb   = XLSX.read(buf, { type: "array" });
+        const ws   = wb.Sheets[wb.SheetNames[0]];
+        rows = XLSX.utils.sheet_to_json(ws, { raw: true });
+      }
+
+      const headers = Object.keys(rows[0] || {});
+      const fnCol  = guessColumn(headers, ["prenom","firstname","prénom","first"]);
+      const lnCol  = guessColumn(headers, ["nom","lastname","name","last"]);
+      const dobCol = guessColumn(headers, ["naissance","dob","birth","date"]);
+      const vs     = guessColumn(headers, ["debut vacances","début","vacances debut","start"]);
+      const ve     = guessColumn(headers, ["fin vacances","fin","vacances fin","end"]);
+
+      const parsed = rows.filter(r => fnCol && r[fnCol]).map(r => ({
+        firstName:      fnCol  ? String(r[fnCol] || "").trim()  : "",
+        lastName:       lnCol  ? String(r[lnCol] || "").trim()  : "",
+        dob:            dobCol ? parseExcelDate(r[dobCol])       : "",
+        vacationPeriods: (vs && ve && r[vs] && r[ve]) ? [{ start: parseExcelDate(r[vs]), end: parseExcelDate(r[ve]) }] : [],
+      })).filter(c => c.firstName && c.dob);
+
+      if (parsed.length === 0) { setImportMsg("❌ Aucun enfant trouvé. Vérifiez le format du fichier."); return; }
+      setImportPreview(parsed);
+      setShowPreview(true);
+      setImportMsg(`✅ ${parsed.length} enfant(s) détecté(s)`);
+    } catch (err) {
+      setImportMsg("❌ Erreur de lecture. Vérifiez le format du fichier.");
+    }
+    e.target.value = "";
+  }
+
+  function confirmImport() {
+    onImport(importPreview);
+    setShowPreview(false);
+    setImportPreview([]);
+    setImportMsg("");
+  }
+
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-4">
         <h2 className="font-bold text-lg" style={{ fontFamily: "Syne, sans-serif" }}>Enfants ({project.children.length})</h2>
         <Btn onClick={onAdd}>+ Ajouter</Btn>
       </div>
+
+      {/* Import zone */}
+      <div className="bg-slate-900/40 border border-slate-700 rounded-xl p-4 mb-6">
+        <div className="text-xs text-slate-400 uppercase tracking-wider mb-3">Import depuis un fichier Excel / CSV</div>
+        <div className="flex flex-wrap gap-2 mb-3">
+          <button onClick={downloadTemplate} className="text-xs text-blue-400 hover:text-blue-300 border border-blue-800/60 hover:border-blue-600 px-3 py-1.5 rounded-lg transition-colors">
+            ⬇ Télécharger le modèle CSV
+          </button>
+          <button onClick={() => fileRef.current?.click()} className="text-xs text-emerald-400 hover:text-emerald-300 border border-emerald-800/60 hover:border-emerald-600 px-3 py-1.5 rounded-lg transition-colors">
+            📂 Importer un fichier (.xlsx / .csv)
+          </button>
+          <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv,.txt" className="hidden" onChange={handleFile} />
+        </div>
+        {importMsg && <div className="text-xs text-slate-300 mb-2">{importMsg}</div>}
+        {showPreview && importPreview.length > 0 && (
+          <div className="mt-3 bg-slate-800/60 rounded-xl p-3">
+            <div className="text-xs text-slate-400 mb-2">Aperçu — vérifiez avant d&apos;importer :</div>
+            <div className="space-y-1 max-h-40 overflow-y-auto">
+              {importPreview.map((c, i) => (
+                <div key={i} className="text-xs text-slate-200 flex gap-3">
+                  <span>{c.firstName} {c.lastName}</span>
+                  <span className="text-slate-500">{c.dob}</span>
+                  {c.vacationPeriods.length > 0 && <span className="text-amber-400">🌴 {c.vacationPeriods[0].start} → {c.vacationPeriods[0].end}</span>}
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2 mt-3">
+              <button onClick={() => { setShowPreview(false); setImportMsg(""); }} className="text-xs text-slate-400 hover:text-white">Annuler</button>
+              <button onClick={confirmImport} className="text-xs bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg">Confirmer l&apos;import ({importPreview.length})</button>
+            </div>
+          </div>
+        )}
+      </div>
+
       {project.children.length === 0 ? <div className="text-slate-500 text-center py-12 text-sm">Aucun enfant enregistré</div> :
         <div className="space-y-3">{project.children.map(c => (
           <div key={c.id} className="flex items-center gap-4 bg-slate-900/50 border border-slate-700 rounded-xl px-5 py-4">
@@ -650,6 +962,7 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove }: { project: Project; o
   );
 }
 
+// ─── Groups Tab ───────────────────────────────────────────────────────────────
 function GroupsTab({ project, onAdd, onRemove, onUpdateGroup }: { project: Project; onAdd: () => void; onRemove: (id: string) => void; onUpdateGroup: (id: string, d: any) => void }) {
   const [editing, setEditing] = useState<string | null>(null);
   return (
@@ -664,22 +977,33 @@ function GroupsTab({ project, onAdd, onRemove, onUpdateGroup }: { project: Proje
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-bold text-white">{g.name}</h3>
               <div className="flex gap-2">
-                <button onClick={() => setEditing(editing === g.id ? null : g.id)} className="text-slate-400 hover:text-white">✏️</button>
+                <button onClick={() => setEditing(editing === g.id ? null : g.id)} className="text-slate-400 hover:text-white text-sm px-2 py-1 rounded border border-slate-600 hover:border-slate-400">
+                  {editing === g.id ? "✓ Fermer" : "✏️ Gérer les membres"}
+                </button>
                 <button onClick={() => onRemove(g.id)} className="text-slate-500 hover:text-red-400">✕</button>
               </div>
             </div>
-            {editing === g.id && <div className="mb-3 space-y-1">
-              {project.children.map(c => (
-                <label key={c.id} className="flex items-center gap-2 text-sm cursor-pointer hover:bg-slate-800 px-2 py-1.5 rounded-lg">
-                  <input type="checkbox" className="accent-blue-500" checked={(g.child_ids || []).includes(c.id)}
-                    onChange={e => onUpdateGroup(g.id, { child_ids: e.target.checked ? [...(g.child_ids || []), c.id] : (g.child_ids || []).filter((i: string) => i !== c.id) })} />
-                  <span className="text-slate-200">{c.first_name} {c.last_name}</span>
-                </label>
-              ))}
-            </div>}
+            {editing === g.id && (
+              <div className="mb-4 bg-slate-800/50 rounded-xl p-3">
+                <div className="text-[10px] text-slate-400 uppercase tracking-wider mb-2">Sélectionner les enfants du groupe</div>
+                {project.children.length === 0
+                  ? <div className="text-xs text-slate-500">Aucun enfant dans le projet — ajoutez des enfants dans l&apos;onglet Enfants d&apos;abord</div>
+                  : <div className="space-y-1">
+                    {project.children.map(c => (
+                      <label key={c.id} className="flex items-center gap-3 cursor-pointer hover:bg-slate-700/50 px-2 py-1.5 rounded-lg">
+                        <input type="checkbox" className="accent-blue-500 w-4 h-4" checked={(g.child_ids || []).includes(c.id)}
+                          onChange={e => onUpdateGroup(g.id, { child_ids: e.target.checked ? [...(g.child_ids || []), c.id] : (g.child_ids || []).filter((i: string) => i !== c.id) })} />
+                        <span className="text-sm text-slate-200">{c.first_name} {c.last_name}</span>
+                        <Badge color="blue">{getAgeBand(c.dob)} ans</Badge>
+                      </label>
+                    ))}
+                  </div>
+                }
+              </div>
+            )}
             <div className="flex flex-wrap gap-2">
               {(g.child_ids || []).map((id: string) => { const c = project.children.find(ch => ch.id === id); return c ? <Badge key={id} color="slate">{c.first_name} {c.last_name}</Badge> : null; })}
-              {!g.child_ids?.length && <span className="text-xs text-slate-500">Aucun membre</span>}
+              {!g.child_ids?.length && <span className="text-xs text-slate-500">Aucun membre — cliquez sur &quot;Gérer les membres&quot;</span>}
             </div>
           </div>
         ))}</div>
@@ -688,6 +1012,7 @@ function GroupsTab({ project, onAdd, onRemove, onUpdateGroup }: { project: Proje
   );
 }
 
+// ─── Settings Tab ─────────────────────────────────────────────────────────────
 function SettingsTab({ rules, onUpdateRules }: { rules: Rules; onUpdateRules: (fn: (r: Rules) => Rules) => void }) {
   function setRule(path: string, value: string) {
     onUpdateRules(r => {
@@ -744,6 +1069,7 @@ function SettingsTab({ rules, onUpdateRules }: { rules: Rules; onUpdateRules: (f
   );
 }
 
+// ─── Modals ───────────────────────────────────────────────────────────────────
 function ChildFormModal({ child, onSave, onClose }: { child: Child | null; onSave: (d: any) => void; onClose: () => void }) {
   const [form, setForm] = useState({ firstName: child?.first_name || "", lastName: child?.last_name || "", dob: child?.dob || "", vacationPeriods: child?.vacation_periods || [] as VacationPeriod[] });
   const [newVac, setNewVac] = useState({ start: "", end: "" });
@@ -793,31 +1119,37 @@ function GroupFormModal({ group, onSave, onClose }: { group: Group | null; onSav
 // ═════════════════════════════════════════════════════════════════════════════
 // SHOOTING VIEW
 // ═════════════════════════════════════════════════════════════════════════════
-function ShootingView({ project, dateStr, onBack, onStartSession, onApplyEvent, onEndSessions, onToggleChild, onAddGroup, onEditEventTime, onEditStartTime }: {
+function ShootingView({ project, dateStr, onBack, onStartSession, onCancelSession, onApplyEvent, onCancelLastEvent, onEndSessions, onReopenSession, onToggleChild, onAddGroup, onEditEventTime, onEditStartTime, onEditEndTime, onExportXLSX, onExportPDF }: {
   project: Project; dateStr: string; onBack: () => void;
   onStartSession: (cid: string, t?: string) => void;
+  onCancelSession: (cid: string) => void;
   onApplyEvent: (cids: string[], type: "pause_start" | "pause_end", t?: string) => void;
+  onCancelLastEvent: (cid: string) => void;
   onEndSessions: (cids: string[], t?: string) => void;
+  onReopenSession: (cid: string) => void;
   onToggleChild: (cid: string) => void;
   onAddGroup: (gid: string) => void;
   onEditEventTime: (cid: string, idx: number, t: string) => void;
   onEditStartTime: (cid: string, t: string) => void;
+  onEditEndTime: (cid: string, t: string) => void;
+  onExportXLSX: () => void;
+  onExportPDF: () => void;
 }) {
-  const [, setTick] = useState(0);
+  const [, setTick]           = useState(0);
   const [addingChildren, setAdding] = useState(false);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selected, setSelected]     = useState<Set<string>>(new Set());
   const [actionModal, setActionModal] = useState<{ type: "start" | "pause" | "resume" | "end" } | null>(null);
 
   useEffect(() => { const t = setInterval(() => setTick(n => n + 1), 15000); return () => clearInterval(t); }, []);
 
-  const day = project.shootingDays[dateStr] || { child_ids: [], sessions: {} };
+  const day      = project.shootingDays[dateStr] || { child_ids: [], sessions: {} };
   const childIds = day.child_ids || [];
   const sessions = day.sessions || {};
-  const rules = project.rules;
+  const rules    = project.rules;
   const dateLabel = new Date(dateStr + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
 
   function toggleSelect(id: string) { setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }); }
-  const selList = [...selected];
+  const selList   = [...selected];
   const canStart  = selList.some(id => !sessions[id]?.start_time);
   const canPause  = selList.some(id => sessions[id]?.status === "working");
   const canResume = selList.some(id => sessions[id]?.status === "paused");
@@ -827,12 +1159,18 @@ function ShootingView({ project, dateStr, onBack, onStartSession, onApplyEvent, 
     <div className="min-h-screen bg-[#080d16] text-white" style={{ fontFamily: "'DM Mono', monospace" }}>
       <div className="border-b border-slate-800 px-6 py-4 flex items-center gap-4">
         <button onClick={onBack} className="text-slate-400 hover:text-white text-sm">← {project.name}</button>
-        <div>
+        <div className="flex-1">
           <h1 className="text-lg font-extrabold capitalize" style={{ fontFamily: "Syne, sans-serif" }}>{dateLabel}</h1>
           <div className="text-xs text-slate-400">{childIds.length} enfant(s) · {selected.size} sélectionné(s)</div>
         </div>
+        <div className="flex gap-2">
+          <button onClick={onExportXLSX} className="text-xs text-emerald-400 hover:text-emerald-300 border border-emerald-800/60 hover:border-emerald-600 px-3 py-1.5 rounded-lg transition-colors">⬇ Excel</button>
+          <button onClick={onExportPDF}  className="text-xs text-blue-400 hover:text-blue-300 border border-blue-800/60 hover:border-blue-600 px-3 py-1.5 rounded-lg transition-colors">⬇ PDF</button>
+        </div>
       </div>
+
       <div className="max-w-4xl mx-auto px-6 py-6">
+        {/* Manage children */}
         <div className="mb-5">
           <button onClick={() => setAdding(v => !v)} className="text-sm text-blue-400 hover:text-blue-300 border border-blue-800/60 hover:border-blue-600 px-4 py-2 rounded-lg transition-colors">
             {addingChildren ? "✕ Fermer" : "+ Gérer les enfants de la journée"}
@@ -859,6 +1197,7 @@ function ShootingView({ project, dateStr, onBack, onStartSession, onApplyEvent, 
           )}
         </div>
 
+        {/* Selection toolbar */}
         {childIds.length > 0 && (
           <div className="bg-slate-900/60 border border-slate-700 rounded-xl px-5 py-3 mb-5 flex flex-wrap items-center gap-3">
             <span className="text-xs text-slate-400 font-semibold">Sélection :</span>
@@ -884,10 +1223,22 @@ function ShootingView({ project, dateStr, onBack, onStartSession, onApplyEvent, 
           : <div className="space-y-4">
             {childIds.map(id => {
               const child = project.children.find(c => c.id === id); if (!child) return null;
-              const session = sessions[id], vacation = isVacation(child, dateStr), band = getAgeBand(child.dob), period: Period = vacation ? "vacation" : "school";
-              const maxWork = rules.maxWorkMinutes[band][period], breakAfter = rules.mandatoryBreakAfterMinutes[band][period];
-              const stats = computeSessionStats(session, rules);
-              return <ChildCard key={id} child={child} session={session} stats={stats} maxWork={maxWork} breakAfter={breakAfter} maxAmplitude={rules.maxAmplitudeMinutes} vacation={vacation} isSelected={selected.has(id)} onSelect={() => toggleSelect(id)} onStart={t => onStartSession(id, t)} onEditEventTime={(idx, t) => onEditEventTime(id, idx, t)} onEditStartTime={t => onEditStartTime(id, t)} dateStr={dateStr} />;
+              const session  = sessions[id];
+              const vacation = isVacation(child, dateStr);
+              const band     = getAgeBand(child.dob);
+              const period: Period = vacation ? "vacation" : "school";
+              const maxWork  = rules.maxWorkMinutes[band][period];
+              const breakAfter = rules.mandatoryBreakAfterMinutes[band][period];
+              const stats    = computeSessionStats(session, rules);
+              return <ChildCard key={id} child={child} session={session} stats={stats} maxWork={maxWork} breakAfter={breakAfter} maxAmplitude={rules.maxAmplitudeMinutes} vacation={vacation} isSelected={selected.has(id)} onSelect={() => toggleSelect(id)}
+                onStart={t => onStartSession(id, t)}
+                onCancelSession={() => onCancelSession(id)}
+                onCancelLastEvent={() => onCancelLastEvent(id)}
+                onReopenSession={() => onReopenSession(id)}
+                onEditEventTime={(idx, t) => onEditEventTime(id, idx, t)}
+                onEditStartTime={t => onEditStartTime(id, t)}
+                onEditEndTime={t => onEditEndTime(id, t)}
+                dateStr={dateStr} />;
             })}
           </div>
         }
@@ -896,7 +1247,7 @@ function ShootingView({ project, dateStr, onBack, onStartSession, onApplyEvent, 
       {actionModal && <TimeActionModal type={actionModal.type} childCount={selected.size} dateStr={dateStr}
         onConfirm={timeISO => {
           const ids = [...selected];
-          if (actionModal.type === "start") ids.forEach(id => onStartSession(id, timeISO));
+          if (actionModal.type === "start")  ids.forEach(id => onStartSession(id, timeISO));
           else if (actionModal.type === "pause")  onApplyEvent(ids, "pause_start", timeISO);
           else if (actionModal.type === "resume") onApplyEvent(ids, "pause_end", timeISO);
           else if (actionModal.type === "end")    onEndSessions(ids, timeISO);
@@ -933,29 +1284,43 @@ function TimeActionModal({ type, childCount, dateStr, onConfirm, onClose }: { ty
   );
 }
 
-function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, vacation, isSelected, onSelect, onStart, onEditEventTime, onEditStartTime, dateStr }: {
+// ─── Child Card ───────────────────────────────────────────────────────────────
+function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, vacation, isSelected, onSelect, onStart, onCancelSession, onCancelLastEvent, onReopenSession, onEditEventTime, onEditStartTime, onEditEndTime, dateStr }: {
   child: Child; session: Session | undefined; stats: SessionStats | null;
   maxWork: number; breakAfter: number; maxAmplitude: number; vacation: boolean;
   isSelected: boolean; onSelect: () => void;
   onStart: (t?: string) => void;
+  onCancelSession: () => void;
+  onCancelLastEvent: () => void;
+  onReopenSession: () => void;
   onEditEventTime: (idx: number, t: string) => void;
   onEditStartTime: (t: string) => void;
+  onEditEndTime: (t: string) => void;
   dateStr: string;
 }) {
-  const [editingIdx, setEditingIdx] = useState<number | "start" | null>(null);
-  const [editTime, setEditTime] = useState("");
+  const [editingIdx, setEditingIdx] = useState<number | "start" | "end" | null>(null);
+  const [editTime, setEditTime]     = useState("");
   const band = getAgeBand(child.dob);
   const workPct = stats ? Math.min(100, (stats.workMin / maxWork) * 100) : 0;
   const ampPct  = stats ? Math.min(100, (stats.amplitudeMin / maxAmplitude) * 100) : 0;
   const workCrit = stats && stats.workMin >= maxWork, workWarn = stats && stats.workMin >= maxWork * 0.8;
   const ampCrit  = stats && stats.amplitudeMin >= maxAmplitude, ampWarn = stats && stats.amplitudeMin >= maxAmplitude * 0.85;
   const breakDue = stats?.timeSinceBreak != null && stats.timeSinceBreak >= breakAfter;
-  function startEdit(key: number | "start", iso: string | undefined) { setEditingIdx(key); setEditTime(isoToTimeStr(iso)); }
-  function confirmEdit() { const iso = timeStrToISO(dateStr, editTime); if (editingIdx === "start") onEditStartTime(iso); else onEditEventTime(editingIdx as number, iso); setEditingIdx(null); }
+
+  function startEdit(key: number | "start" | "end", iso: string | undefined) { setEditingIdx(key); setEditTime(isoToTimeStr(iso)); }
+  function confirmEdit() {
+    const iso = timeStrToISO(dateStr, editTime);
+    if (editingIdx === "start") onEditStartTime(iso);
+    else if (editingIdx === "end") onEditEndTime(iso);
+    else onEditEventTime(editingIdx as number, iso);
+    setEditingIdx(null);
+  }
+
   const events = session?.events || [];
 
   return (
     <div className={`rounded-2xl p-5 border transition-all ${isSelected ? "border-blue-500 bg-blue-950/30" : workCrit || ampCrit ? "border-red-700 bg-slate-900/60" : breakDue ? "border-amber-600 bg-slate-900/60" : "border-slate-700 bg-slate-900/50"}`}>
+      {/* Header */}
       <div className="flex items-start gap-3 mb-4">
         <button onClick={onSelect} className={`mt-1 w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 transition-colors ${isSelected ? "bg-blue-600 border-blue-500" : "border-slate-600"}`}>
           {isSelected && <span className="text-white text-xs leading-none">✓</span>}
@@ -980,6 +1345,7 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
         </div>
       </div>
 
+      {/* Stats */}
       {stats && (
         <>
           <div className="grid grid-cols-3 gap-2 mb-4">
@@ -992,6 +1358,7 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
               </div>
             ))}
           </div>
+
           <div className="space-y-1.5 mb-4">
             {([{ l: "Travail", p: workPct, crit: workCrit, warn: workWarn }, { l: "Amplitude", p: ampPct, crit: ampCrit, warn: ampWarn }] as any[]).map(({ l, p, crit, warn }) => (
               <div key={l}>
@@ -1000,23 +1367,48 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
               </div>
             ))}
           </div>
+
           {breakDue && !workCrit && <div className="bg-amber-900/30 border border-amber-700 rounded-lg px-3 py-2 text-xs text-amber-300 mb-3">⚠️ Pause obligatoire — {formatMinutes(stats.timeSinceBreak)} consécutifs (seuil : {formatMinutes(breakAfter)})</div>}
           {workCrit && <div className="bg-red-900/30 border border-red-700 rounded-lg px-3 py-2 text-xs text-red-300 mb-3">🚫 Temps de travail maximum atteint</div>}
           {ampCrit  && <div className="bg-red-900/30 border border-red-700 rounded-lg px-3 py-2 text-xs text-red-300 mb-3">🚫 Amplitude maximale atteinte</div>}
 
+          {/* Editable timeline */}
           <div className="bg-slate-800/40 border border-slate-700/50 rounded-xl p-3 mb-3">
-            <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-2">Chronologie — cliquez une heure pour la modifier</div>
+            <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-2">Chronologie — cliquez une heure pour modifier</div>
             <div className="space-y-1.5">
               <TimelineRow label="▶ Début" iso={session?.start_time} isEditing={editingIdx === "start"} editTime={editTime} onEdit={() => startEdit("start", session?.start_time)} onTimeChange={setEditTime} onConfirm={confirmEdit} onCancel={() => setEditingIdx(null)} />
-              {events.map((ev, i) => <TimelineRow key={i} label={ev.type === "pause_start" ? "⏸ Pause" : "▶ Reprise"} iso={ev.time} isEditing={editingIdx === i} editTime={editTime} onEdit={() => startEdit(i, ev.time)} onTimeChange={setEditTime} onConfirm={confirmEdit} onCancel={() => setEditingIdx(null)} />)}
-              {session?.end_time && <div className="text-xs text-slate-400 pl-1">⏹ Fin : {formatTime(session.end_time)}</div>}
+              {events.map((ev, i) => (
+                <TimelineRow key={i} label={ev.type === "pause_start" ? "⏸ Pause" : "▶ Reprise"} iso={ev.time} isEditing={editingIdx === i} editTime={editTime} onEdit={() => startEdit(i, ev.time)} onTimeChange={setEditTime} onConfirm={confirmEdit} onCancel={() => setEditingIdx(null)} />
+              ))}
+              {session?.end_time && (
+                <TimelineRow label="⏹ Fin" iso={session.end_time} isEditing={editingIdx === "end"} editTime={editTime} onEdit={() => startEdit("end", session.end_time)} onTimeChange={setEditTime} onConfirm={confirmEdit} onCancel={() => setEditingIdx(null)} />
+              )}
             </div>
+          </div>
+
+          {/* Action buttons */}
+          <div className="flex flex-wrap gap-2">
+            {session?.status !== "done" && events.length > 0 && (
+              <button onClick={onCancelLastEvent} className="text-xs text-amber-400 hover:text-amber-300 border border-amber-800/60 hover:border-amber-600 px-3 py-1.5 rounded-lg transition-colors">
+                ↩ Annuler dernière action
+              </button>
+            )}
+            {session?.start_time && session?.status !== "done" && (
+              <button onClick={onCancelSession} className="text-xs text-red-400 hover:text-red-300 border border-red-800/60 hover:border-red-600 px-3 py-1.5 rounded-lg transition-colors">
+                🗑 Réinitialiser la journée
+              </button>
+            )}
+            {session?.status === "done" && (
+              <button onClick={onReopenSession} className="text-xs text-blue-400 hover:text-blue-300 border border-blue-800/60 hover:border-blue-600 px-3 py-1.5 rounded-lg transition-colors">
+                ↩ Rouvrir la journée
+              </button>
+            )}
           </div>
         </>
       )}
 
       {!session?.start_time && <SingleStartButton onStart={onStart} dateStr={dateStr} />}
-      {session?.status === "done" && <div className="text-center text-emerald-400 text-sm font-semibold">✓ Journée terminée</div>}
+      {session?.status === "done" && <div className="text-center text-emerald-400 text-sm font-semibold mt-3">✓ Journée terminée</div>}
     </div>
   );
 }
@@ -1041,7 +1433,8 @@ function TimelineRow({ label, iso, isEditing, editTime, onEdit, onTimeChange, on
 function SingleStartButton({ onStart, dateStr }: { onStart: (t?: string) => void; dateStr: string }) {
   const now = new Date();
   const def = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-  const [open, setOpen] = useState(false), [timeStr, setTimeStr] = useState(def);
+  const [open, setOpen]     = useState(false);
+  const [timeStr, setTimeStr] = useState(def);
   if (!open) return <button onClick={() => setOpen(true)} className="w-full bg-emerald-700 hover:bg-emerald-600 text-white py-2.5 rounded-xl font-semibold text-sm transition-colors">▶ Démarrer la journée</button>;
   return (
     <div className="bg-slate-800/60 border border-slate-600 rounded-xl p-4 space-y-3">
