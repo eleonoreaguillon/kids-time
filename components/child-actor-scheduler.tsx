@@ -951,7 +951,7 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport }: { project: 
       const vs      = guessColumn(headers, ["debut vacances", "début vacances", "vacances debut", "start vacances", "debut vac"]);
       const ve      = guessColumn(headers, ["fin vacances", "vacances fin", "end vacances", "fin vac"]);
       // Fix #5: detect statut column
-      const statCol = guessColumn(headers, ["statut", "status", "role", "rôle", "type"]);
+     const statCol = guessColumn(headers, ["statut", "status", "type"]);
 
       const parsed = rows.map(r => {
         // Fix #3: name handling
@@ -1267,7 +1267,7 @@ function ChildFormModal({ child, onSave, onClose }: { child: Child | null; onSav
     if (!form.fullName.trim()) { setError("Le prénom et nom sont obligatoires."); return; }
     if (!form.dob) { setError("La date de naissance est obligatoire."); return; }
     setError("");
-    onSave({ ...form, role: form.role || undefined });
+   onSave({ ...form, role: form.role || null });
   }
 
   return (
