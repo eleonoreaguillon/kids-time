@@ -103,15 +103,15 @@ const DEFAULT_RULES: Rules = {
 const AGE_BANDS: AgeBand[] = ["0-2", "3-5", "6-11", "12-16"];
 
 const ROLE_LABELS: Record<ChildRole, string> = {
-  role: "Rôle",
+  role:       "Rôle",
   silhouette: "Silhouette",
-  figurant: "Figurant·e",
+  figurant:   "Figurant·e",
 };
 
 const ROLE_COLORS: Record<ChildRole, string> = {
-  role: "bg-purple-900/40 text-purple-300 border-purple-700",
+  role:       "bg-purple-900/40 text-purple-300 border-purple-700",
   silhouette: "bg-cyan-900/40 text-cyan-300 border-cyan-700",
-  figurant: "bg-orange-900/40 text-orange-300 border-orange-700",
+  figurant:   "bg-orange-900/40 text-orange-300 border-orange-700",
 };
 
 const ALL_ROLES: ChildRole[] = ["role", "silhouette", "figurant"];
@@ -127,17 +127,13 @@ function getAge(dob: string): number {
 
 function getAgeBand(dob: string): AgeBand {
   const a = getAge(dob);
-  if (a < 3) return "0-2";
-  if (a < 6) return "3-5";
-  if (a < 12) return "6-11";
-  return "12-16";
+  if (a < 3) return "0-2"; if (a < 6) return "3-5"; if (a < 12) return "6-11"; return "12-16";
 }
 
 function formatMinutes(min: number | null | undefined): string {
   if (min == null || isNaN(min)) return "0min";
   const h = Math.floor(Math.abs(min) / 60), m = Math.abs(min) % 60, s = min < 0 ? "-" : "";
-  if (h === 0) return `${s}${m}min`;
-  if (m === 0) return `${s}${h}h`;
+  if (h === 0) return `${s}${m}min`; if (m === 0) return `${s}${h}h`;
   return `${s}${h}h${String(m).padStart(2, "0")}`;
 }
 
@@ -166,12 +162,49 @@ function normalize(s: string): string {
   return s.toLowerCase().trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
-// Fix #1: split full name — first word = prénom, rest = nom
+// Fix #3: fullName stored as-is, split only for DB storage
 function splitFullName(full: string): { firstName: string; lastName: string } {
   const parts = full.trim().split(/\s+/);
   if (parts.length === 0) return { firstName: "", lastName: "" };
   if (parts.length === 1) return { firstName: parts[0], lastName: "" };
   return { firstName: parts[0], lastName: parts.slice(1).join(" ") };
+}
+
+// Fix #5: detect role from string value
+function detectRole(val: string): ChildRole | undefined {
+  const n = normalize(String(val || ""));
+  if (n.includes("role") || n.includes("rôle")) return "role";
+  if (n.includes("silhouette")) return "silhouette";
+  if (n.includes("figurant") || n.includes("figuration")) return "figurant";
+  return undefined;
+}
+
+function parseExcelDate(val: any): string {
+  if (!val) return "";
+  if (typeof val === "number") {
+    const d = new Date((val - 25569) * 86400 * 1000);
+    return d.toISOString().slice(0, 10);
+  }
+  if (typeof val === "string") {
+    const trimmed = val.trim();
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(trimmed)) {
+      const [d, m, y] = trimmed.split("/"); return `${y}-${m}-${d}`;
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+    const parsed = new Date(trimmed);
+    if (!isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+  }
+  return "";
+}
+
+function guessColumn(headers: string[], candidates: string[]): string | null {
+  const normalized = headers.map(x => normalize(x || ""));
+  for (const cand of candidates) {
+    const nc = normalize(cand);
+    const idx = normalized.findIndex(x => x === nc || x.includes(nc) || nc.includes(x));
+    if (idx !== -1) return headers[idx];
+  }
+  return null;
 }
 
 function computeSessionStats(session: Session | undefined, rules: Rules): SessionStats | null {
@@ -211,14 +244,11 @@ function computeSessionStats(session: Session | undefined, rules: Rules): Sessio
 }
 
 // ─── Export ───────────────────────────────────────────────────────────────────
-function buildExportRows(project: Project, dateStr: string, filterRole?: ChildRole) {
-  const day = project.shootingDays[dateStr];
-  if (!day) return [];
+function buildExportRows(project: Project, dateStr: string) {
+  const day = project.shootingDays[dateStr]; if (!day) return [];
   const rows: any[] = [];
   for (const childId of day.child_ids || []) {
-    const child = project.children.find(c => c.id === childId);
-    if (!child) continue;
-    if (filterRole && child.role !== filterRole) continue;
+    const child = project.children.find(c => c.id === childId); if (!child) continue;
     const session  = day.sessions?.[childId];
     const vacation = isVacation(child, dateStr);
     const band     = getAgeBand(child.dob);
@@ -226,11 +256,11 @@ function buildExportRows(project: Project, dateStr: string, filterRole?: ChildRo
     const maxWork  = project.rules.maxWorkMinutes[band][period];
     const maxAmp   = project.rules.maxAmplitudeMinutes;
     const stats    = computeSessionStats(session, project.rules);
-    const breakSlotsStr = stats?.breakSlots.map(b => `${formatTime(b.start)}-${formatTime(b.end)} (${formatMinutes(b.durationMin)}${b.valid ? "" : " ⚠"})`).join(" / ") || "--";
     const workOver = stats ? Math.max(0, stats.workMin - maxWork) : 0;
     const ampOver  = stats ? Math.max(0, stats.amplitudeMin - maxAmp) : 0;
+    const breakSlotsStr = stats?.breakSlots.map(b => `${formatTime(b.start)}-${formatTime(b.end)} (${formatMinutes(b.durationMin)}${b.valid ? "" : " ⚠"})`).join(" / ") || "--";
     rows.push({
-      "Nom Prénom":                 `${child.last_name} ${child.first_name}`,
+      "Nom Prénom":                 `${child.first_name} ${child.last_name}`.trim(),
       "Statut":                     child.role ? ROLE_LABELS[child.role] : "--",
       "Date de naissance":          child.dob,
       "Tranche d'âge":              band,
@@ -246,24 +276,20 @@ function buildExportRows(project: Project, dateStr: string, filterRole?: ChildRo
       "Amplitude de présence":      stats ? formatMinutes(stats.amplitudeMin) : "--",
       "Amplitude autorisée":        formatMinutes(maxAmp),
       "Dépassement amplitude":      ampOver > 0 ? formatMinutes(ampOver) : "0",
-      "_child": child, "_session": session, "_stats": stats, "_maxWork": maxWork, "_maxAmp": maxAmp, "_vacation": vacation, "_band": band,
+      _child: child, _session: session, _stats: stats, _maxWork: maxWork, _maxAmp: maxAmp, _vacation: vacation, _band: band,
     });
   }
   return rows;
 }
 
-// Fix #3: export with separate sheets per role
 function exportDayToXLSX(project: Project, dateStr: string) {
-  const day = project.shootingDays[dateStr];
-  if (!day) return;
-
+  const day = project.shootingDays[dateStr]; if (!day) return;
   const allRows = buildExportRows(project, dateStr);
   const clean = (rows: any[]) => rows.map(r => {
     const o: any = {};
     for (const k of Object.keys(r)) { if (!k.startsWith("_")) o[k] = r[k]; }
     return o;
   });
-
   const headers = Object.keys(allRows[0] || {}).filter(k => !k.startsWith("_"));
   const toCsv = (rows: any[]) => [
     headers.join(";"),
@@ -273,29 +299,15 @@ function exportDayToXLSX(project: Project, dateStr: string) {
   if (typeof window !== "undefined" && (window as any).XLSX) {
     const XLSX = (window as any).XLSX;
     const wb   = XLSX.utils.book_new();
-
-    // All children sheet
-    const wsAll = XLSX.utils.json_to_sheet(clean(allRows));
-    XLSX.utils.book_append_sheet(wb, wsAll, "Tous");
-
-    // One sheet per role that has children
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(clean(allRows)), "Tous");
     for (const role of ALL_ROLES) {
       const roleRows = allRows.filter(r => r._child?.role === role);
-      if (roleRows.length > 0) {
-        const ws = XLSX.utils.json_to_sheet(clean(roleRows));
-        XLSX.utils.book_append_sheet(wb, ws, ROLE_LABELS[role]);
-      }
+      if (roleRows.length > 0) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(clean(roleRows)), ROLE_LABELS[role]);
     }
-    // Sheet for children without role
     const noRoleRows = allRows.filter(r => !r._child?.role);
-    if (noRoleRows.length > 0) {
-      const ws = XLSX.utils.json_to_sheet(clean(noRoleRows));
-      XLSX.utils.book_append_sheet(wb, ws, "Non défini");
-    }
-
+    if (noRoleRows.length > 0) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(clean(noRoleRows)), "Non défini");
     XLSX.writeFile(wb, `KidsTime_${dateStr}_${project.name}.xlsx`);
   } else {
-    // CSV fallback — all children
     const blob = new Blob(["\uFEFF" + toCsv(allRows)], { type: "text/csv;charset=utf-8;" });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement("a");
@@ -304,19 +316,16 @@ function exportDayToXLSX(project: Project, dateStr: string) {
   }
 }
 
-// Fix #3: PDF with sections per role
 function exportDayToPDF(project: Project, dateStr: string) {
-  const day = project.shootingDays[dateStr];
-  if (!day) return;
+  const day = project.shootingDays[dateStr]; if (!day) return;
   const dateLabel = new Date(dateStr + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-
   const childTable = (row: any) => {
     const { _child: child, _session: session, _stats: stats, _maxWork: maxWork, _maxAmp: maxAmp, _vacation: vacation, _band: band } = row;
     const workOver = stats ? Math.max(0, stats.workMin - maxWork) : 0;
     const ampOver  = stats ? Math.max(0, stats.amplitudeMin - maxAmp) : 0;
     const breakSlotsStr = stats?.breakSlots.map((b: any) => `${formatTime(b.start)}-${formatTime(b.end)} (${formatMinutes(b.durationMin)}${b.valid ? "" : " ⚠"})`).join("<br>") || "--";
     return `<table>
-      <tr><th colspan="4">${child.last_name} ${child.first_name}${child.role ? ` — ${ROLE_LABELS[child.role as ChildRole]}` : ""} — ${getAge(child.dob)} ans (${band} ans) — ${vacation ? "Vacances" : "Scolaire"}</th></tr>
+      <tr><th colspan="4">${child.first_name} ${child.last_name}${child.role ? ` — ${ROLE_LABELS[child.role as ChildRole]}` : ""} — ${getAge(child.dob)} ans (${band} ans) — ${vacation ? "Vacances" : "Scolaire"}</th></tr>
       <tr>
         <td><b>Heure de convocation</b><br>${session?.start_time ? formatTime(session.start_time) : "--"}</td>
         <td><b>Heure de fin</b><br>${session?.end_time ? formatTime(session.end_time) : "--"}</td>
@@ -336,74 +345,30 @@ function exportDayToPDF(project: Project, dateStr: string) {
       </tr>
     </table>`;
   };
-
   const allRows = buildExportRows(project, dateStr);
-
   let html = `<html><head><meta charset="utf-8">
   <style>
     body { font-family: Arial, sans-serif; font-size: 11px; color: #111; padding: 20px; }
-    h1 { font-size: 18px; margin-bottom: 4px; }
-    h2 { font-size: 13px; color: #444; margin-bottom: 16px; font-weight: normal; }
+    h1 { font-size: 18px; margin-bottom: 4px; } h2 { font-size: 13px; color: #444; margin-bottom: 16px; font-weight: normal; }
     h3 { font-size: 12px; color: #1e3a5f; border-bottom: 2px solid #1e3a5f; padding-bottom: 4px; margin: 20px 0 10px; }
     table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
     th { background: #1e3a5f; color: white; padding: 7px 8px; text-align: left; font-size: 10px; }
     td { padding: 6px 8px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
     tr:nth-child(even) td { background: #f8fafc; }
-    .over { color: #dc2626; font-weight: bold; }
-    .ok { color: #16a34a; }
+    .over { color: #dc2626; font-weight: bold; } .ok { color: #16a34a; }
     .footer { margin-top: 30px; font-size: 9px; color: #999; text-align: center; }
-    @media print { h3 { page-break-before: auto; } }
   </style></head><body>
   <h1>KidsTime — Récapitulatif journée</h1>
   <h2>${dateLabel} &nbsp;·&nbsp; ${project.name}</h2>`;
-
-  // Group by role in PDF
   for (const role of ALL_ROLES) {
     const roleRows = allRows.filter(r => r._child?.role === role);
-    if (roleRows.length > 0) {
-      html += `<h3>${ROLE_LABELS[role]} (${roleRows.length})</h3>`;
-      html += roleRows.map(childTable).join("");
-    }
+    if (roleRows.length > 0) { html += `<h3>${ROLE_LABELS[role]} (${roleRows.length})</h3>`; html += roleRows.map(childTable).join(""); }
   }
   const noRoleRows = allRows.filter(r => !r._child?.role);
-  if (noRoleRows.length > 0) {
-    html += `<h3>Statut non défini (${noRoleRows.length})</h3>`;
-    html += noRoleRows.map(childTable).join("");
-  }
-
+  if (noRoleRows.length > 0) { html += `<h3>Statut non défini (${noRoleRows.length})</h3>`; html += noRoleRows.map(childTable).join(""); }
   html += `<div class="footer">Généré par KidsTime · Éléonore Aguillon · ACMA Fiction · ${new Date().toLocaleDateString("fr-FR")}</div></body></html>`;
   const w = window.open("", "_blank");
   if (w) { w.document.write(html); w.document.close(); setTimeout(() => w.print(), 500); }
-}
-
-// ─── Excel import ──────────────────────────────────────────────────────────────
-function parseExcelDate(val: any): string {
-  if (!val) return "";
-  if (typeof val === "number") {
-    const d = new Date((val - 25569) * 86400 * 1000);
-    return d.toISOString().slice(0, 10);
-  }
-  if (typeof val === "string") {
-    const trimmed = val.trim();
-    if (/^\d{2}\/\d{2}\/\d{4}$/.test(trimmed)) {
-      const [d, m, y] = trimmed.split("/");
-      return `${y}-${m}-${d}`;
-    }
-    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
-    const parsed = new Date(trimmed);
-    if (!isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
-  }
-  return "";
-}
-
-function guessColumn(headers: string[], candidates: string[]): string | null {
-  const normalized = headers.map(x => normalize(x || ""));
-  for (const cand of candidates) {
-    const nc = normalize(cand);
-    const idx = normalized.findIndex(x => x === nc || x.includes(nc) || nc.includes(x));
-    if (idx !== -1) return headers[idx];
-  }
-  return null;
 }
 
 // ─── UI Primitives ────────────────────────────────────────────────────────────
@@ -442,11 +407,17 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
   );
 }
 
-function TextInput({ label, ...props }: { label?: string } & React.InputHTMLAttributes<HTMLInputElement>) {
+function TextInput({ label, required: req, ...props }: { label?: string; required?: boolean } & React.InputHTMLAttributes<HTMLInputElement>) {
   return (
     <div className="flex flex-col gap-1">
-      {label && <label className="text-[10px] text-slate-400 uppercase tracking-[0.15em] font-semibold">{label}</label>}
-      <input className="bg-slate-800/80 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500 transition-colors placeholder:text-slate-600" {...props} />
+      {label && (
+        <label className="text-[10px] text-slate-400 uppercase tracking-[0.15em] font-semibold flex items-center gap-1">
+          {label}
+          {/* Fix #4: show required indicator */}
+          {req && <span className="text-red-400">*</span>}
+        </label>
+      )}
+      <input required={req} className="bg-slate-800/80 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500 transition-colors placeholder:text-slate-600" {...props} />
     </div>
   );
 }
@@ -572,9 +543,12 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     setActiveProject(f); setView("project"); setLoading(false);
   }
 
-  async function refreshActive() {
-    if (!activeProject) return;
-    const f = await loadFullProject(activeProject.id); setActiveProject(f);
+  // Fix #2: use setActiveProject directly after insert to ensure UI refresh
+  async function refreshActive(projectId?: string) {
+    const id = projectId || activeProject?.id;
+    if (!id) return;
+    const f = await loadFullProject(id);
+    setActiveProject(f);
   }
 
   async function createProject(name: string) {
@@ -586,11 +560,14 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
 
   async function addChild(child: { fullName: string; dob: string; vacationPeriods: VacationPeriod[]; role?: ChildRole }) {
     const { firstName, lastName } = splitFullName(child.fullName);
-    await supabase.from("children").insert({ project_id: activeProject!.id, first_name: firstName, last_name: lastName, dob: child.dob, vacation_periods: child.vacationPeriods || [], role: child.role || null });
-    await refreshActive();
+    const { error } = await supabase.from("children").insert({
+      project_id: activeProject!.id, first_name: firstName, last_name: lastName,
+      dob: child.dob, vacation_periods: child.vacationPeriods || [], role: child.role || null,
+    });
+    if (!error) await refreshActive();
   }
 
-  // Fix #1: import now stores correctly and refreshes
+  // Fix #2: ensure refreshActive is awaited and state is updated before displaying
   async function addChildren(children: { firstName: string; lastName: string; dob: string; vacationPeriods: VacationPeriod[]; role?: ChildRole }[]) {
     if (children.length === 0) return;
     const rows = children.map(c => ({
@@ -602,13 +579,17 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
       role: c.role || null,
     }));
     const { error } = await supabase.from("children").insert(rows);
-    if (error) { console.error("Import error:", error); return; }
+    if (error) { console.error("Import error:", error); throw error; }
+    // Fix #2: force full reload of project to get all newly inserted children
     await refreshActive();
   }
 
   async function updateChild(id: string, data: { fullName: string; dob: string; vacationPeriods: VacationPeriod[]; role?: ChildRole }) {
     const { firstName, lastName } = splitFullName(data.fullName);
-    await supabase.from("children").update({ first_name: firstName, last_name: lastName, dob: data.dob, vacation_periods: data.vacationPeriods || [], role: data.role || null }).eq("id", id);
+    await supabase.from("children").update({
+      first_name: firstName, last_name: lastName, dob: data.dob,
+      vacation_periods: data.vacationPeriods || [], role: data.role || null,
+    }).eq("id", id);
     await refreshActive();
   }
 
@@ -638,12 +619,6 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     await refreshActive();
   }
 
-  async function setDayChildIds(dateStr: string, newIds: string[]) {
-    const day = await getOrCreateDay(dateStr);
-    await supabase.from("shooting_days").update({ child_ids: newIds }).eq("id", day.id);
-    await refreshActive();
-  }
-
   async function toggleChildOnDay(dateStr: string, childId: string) {
     const day = await getOrCreateDay(dateStr);
     const ids = day.child_ids || [];
@@ -660,7 +635,6 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     await refreshActive();
   }
 
-  // Fix #2: remove entire group from day
   async function removeGroupFromDay(dateStr: string, groupId: string) {
     const group = activeProject!.groups.find(g => g.id === groupId); if (!group) return;
     const day = activeProject!.shootingDays[dateStr]; if (!day) return;
@@ -841,7 +815,7 @@ function HomeView({ projects, userEmail, onCreate, onOpen, onDelete, onSignOut }
 // ═════════════════════════════════════════════════════════════════════════════
 function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild, onRemoveChild, onAddGroup, onUpdateGroup, onRemoveGroup, onUpdateRules, onOpenDay }: {
   project: Project; onBack: () => void;
-  onAddChild: (c: any) => void; onAddChildren: (cs: any[]) => void;
+  onAddChild: (c: any) => void; onAddChildren: (cs: any[]) => Promise<void>;
   onUpdateChild: (id: string, d: any) => void; onRemoveChild: (id: string) => void;
   onAddGroup: (name: string) => void; onUpdateGroup: (id: string, d: any) => void; onRemoveGroup: (id: string) => void;
   onUpdateRules: (fn: (r: Rules) => Rules) => void; onOpenDay: (date: string) => void;
@@ -882,7 +856,7 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
   );
 }
 
-// ─── Calendar Tab — Fix #4 ────────────────────────────────────────────────────
+// ─── Calendar Tab ─────────────────────────────────────────────────────────────
 function CalendarTab({ project, onOpenDay }: { project: Project; onOpenDay: (d: string) => void }) {
   const [cur, setCur] = useState(() => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), 1); });
   const y = cur.getFullYear(), m = cur.getMonth();
@@ -891,7 +865,6 @@ function CalendarTab({ project, onOpenDay }: { project: Project; onOpenDay: (d: 
   const MN = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
   const DN = ["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"];
   function ds(d: number) { return `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`; }
-
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
@@ -905,11 +878,8 @@ function CalendarTab({ project, onOpenDay }: { project: Project; onOpenDay: (d: 
           if (!d) return <div key={i} />;
           const s = ds(d);
           const dayData = project.shootingDays[s];
-          // Fix #4: count only children that still exist in the project
           const validChildIds = (dayData?.child_ids || []).filter(id => project.children.find(c => c.id === id));
-          const count   = validChildIds.length;
-          const isShoot = count > 0;
-          const isToday = s === todayStr();
+          const count = validChildIds.length, isShoot = count > 0, isToday = s === todayStr();
           return (
             <button key={i} onClick={() => onOpenDay(s)} className={`rounded-xl py-3 text-sm transition-all ${isShoot ? "bg-blue-900/50 border border-blue-600 text-blue-200 hover:bg-blue-800/60" : "bg-slate-900/40 border border-slate-800 text-slate-400 hover:border-slate-600 hover:text-white"} ${isToday ? "ring-2 ring-blue-400" : ""}`}>
               <div className="font-bold">{d}</div>
@@ -923,17 +893,22 @@ function CalendarTab({ project, onOpenDay }: { project: Project; onOpenDay: (d: 
   );
 }
 
-// ─── Children Tab — Fix #1 ────────────────────────────────────────────────────
-function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport }: { project: Project; onAdd: () => void; onEdit: (c: Child) => void; onRemove: (id: string) => void; onImport: (cs: any[]) => void }) {
+// ─── Children Tab — Fix #1 (role tabs) + Fix #2 (display after import) + Fix #3 (name import) + Fix #5 (role detection)
+function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport }: { project: Project; onAdd: () => void; onEdit: (c: Child) => void; onRemove: (id: string) => void; onImport: (cs: any[]) => Promise<void> }) {
   const fileRef = useRef<HTMLInputElement>(null);
-  const [importMsg, setImportMsg]       = useState("");
+  const [importMsg, setImportMsg]         = useState("");
   const [importPreview, setImportPreview] = useState<any[]>([]);
-  const [showPreview, setShowPreview]   = useState(false);
-  const [importing, setImporting]       = useState(false);
+  const [showPreview, setShowPreview]     = useState(false);
+  const [importing, setImporting]         = useState(false);
+
+  // Fix #1: role tabs in children list
+  const [roleTab, setRoleTab] = useState<ChildRole | "all">("all");
+  const rolesPresent = ALL_ROLES.filter(r => project.children.some(c => c.role === r));
+  const filteredChildren = roleTab === "all" ? project.children : project.children.filter(c => c.role === roleTab);
 
   function downloadTemplate() {
-    // Fix #1: single "Nom Prénom" column
-    const csv = "Nom Prénom;Date de naissance (JJ/MM/AAAA);Début vacances (JJ/MM/AAAA);Fin vacances (JJ/MM/AAAA)\nMartin Léa;15/03/2015;01/07/2025;31/08/2025\n";
+    // Fix #3 + #5: template with Nom Prénom + Statut columns
+    const csv = "Nom Prénom;Statut (role/silhouette/figurant);Date de naissance (JJ/MM/AAAA);Début vacances (JJ/MM/AAAA);Fin vacances (JJ/MM/AAAA)\nMartin Léa;role;15/03/2015;01/07/2025;31/08/2025\n";
     const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement("a"); a.href = url; a.download = "modele_enfants_kidstime.csv"; a.click();
@@ -968,48 +943,55 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport }: { project: 
 
       const headers = Object.keys(rows[0] || {});
 
-      // Fix #1: look for a single full-name column first, then separate columns
-      const fullCol = guessColumn(headers, ["nom prenom", "nom prénom", "nom et prenom", "nom & prenom", "full name", "fullname", "nom complet"]);
+      // Fix #3: detect name columns
+      const fullCol = guessColumn(headers, ["nom prenom", "nom prénom", "prenom nom", "prénom nom", "nom et prenom", "full name", "fullname", "nom complet", "name"]);
       const fnCol   = guessColumn(headers, ["prenom", "prénom", "firstname", "first name", "first"]);
       const lnCol   = guessColumn(headers, ["nom", "lastname", "last name", "last"]);
       const dobCol  = guessColumn(headers, ["naissance", "date de naissance", "dob", "birth", "birthdate", "date naissance"]);
       const vs      = guessColumn(headers, ["debut vacances", "début vacances", "vacances debut", "start vacances", "debut vac"]);
       const ve      = guessColumn(headers, ["fin vacances", "vacances fin", "end vacances", "fin vac"]);
+      // Fix #5: detect statut column
+      const statCol = guessColumn(headers, ["statut", "status", "role", "rôle", "type"]);
 
       const parsed = rows.map(r => {
-        let firstName = "", lastName = "";
+        // Fix #3: name handling
+        let fullName = "";
 
-        if (fullCol && r[fullCol]) {
-          // Single column — split first word = prénom, rest = nom
-          const { firstName: fn, lastName: ln } = splitFullName(String(r[fullCol]));
-          firstName = fn; lastName = ln;
+        if (fullCol && String(r[fullCol] || "").trim()) {
+          // Single column — keep entire value as fullName
+          fullName = String(r[fullCol]).trim();
         } else if (fnCol && lnCol) {
-          firstName = String(r[fnCol] || "").trim();
-          lastName  = String(r[lnCol] || "").trim();
+          // Two separate columns — join with space
+          const fn = String(r[fnCol] || "").trim();
+          const ln = String(r[lnCol] || "").trim();
+          fullName = [fn, ln].filter(Boolean).join(" ");
         } else if (fnCol) {
-          const raw = String(r[fnCol] || "").trim();
-          if (raw.includes(" ")) { const sp = splitFullName(raw); firstName = sp.firstName; lastName = sp.lastName; }
-          else firstName = raw;
+          fullName = String(r[fnCol] || "").trim();
         } else if (lnCol) {
-          const raw = String(r[lnCol] || "").trim();
-          if (raw.includes(" ")) { const sp = splitFullName(raw); firstName = sp.firstName; lastName = sp.lastName; }
-          else lastName = raw;
+          fullName = String(r[lnCol] || "").trim();
         } else {
-          // Fallback: use first two non-empty columns
-          const vals = Object.values(r).filter(v => v !== "");
-          firstName = String(vals[0] || "").trim();
-          lastName  = String(vals[1] || "").trim();
+          // Fallback: first non-empty column value
+          const firstVal = Object.values(r).find(v => String(v || "").trim() !== "");
+          fullName = String(firstVal || "").trim();
         }
+
+        // Fix #3: split into firstName/lastName for DB
+        const { firstName, lastName } = splitFullName(fullName);
+
+        // Fix #5: detect role from statut column
+        const role = statCol ? detectRole(String(r[statCol] || "")) : undefined;
 
         return {
           firstName,
           lastName,
+          fullName, // for preview display
           dob: dobCol ? parseExcelDate(r[dobCol]) : "",
           vacationPeriods: (vs && ve && r[vs] && r[ve]) ? [{ start: parseExcelDate(r[vs]), end: parseExcelDate(r[ve]) }] : [],
+          role,
         };
       }).filter(c => c.firstName && c.dob);
 
-      if (parsed.length === 0) { setImportMsg("❌ Aucun enfant valide trouvé. Vérifiez que la colonne date de naissance est remplie."); return; }
+      if (parsed.length === 0) { setImportMsg("❌ Aucun enfant valide trouvé. Vérifiez que les colonnes Nom Prénom et Date de naissance sont remplies."); return; }
       setImportPreview(parsed);
       setShowPreview(true);
       setImportMsg(`✅ ${parsed.length} enfant(s) détecté(s) — vérifiez l'aperçu ci-dessous`);
@@ -1020,10 +1002,16 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport }: { project: 
     e.target.value = "";
   }
 
+  // Fix #2: await import and show error if it fails
   async function confirmImport() {
     setImporting(true);
-    await onImport(importPreview);
-    setShowPreview(false); setImportPreview([]); setImportMsg(`✅ ${importPreview.length} enfant(s) importé(s) avec succès !`);
+    try {
+      await onImport(importPreview);
+      setShowPreview(false); setImportPreview([]);
+      setImportMsg(`✅ ${importPreview.length} enfant(s) importé(s) avec succès !`);
+    } catch {
+      setImportMsg("❌ Erreur lors de l'import. Réessayez.");
+    }
     setImporting(false);
   }
 
@@ -1035,9 +1023,11 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport }: { project: 
       </div>
 
       {/* Import zone */}
-      <div className="bg-slate-900/40 border border-slate-700 rounded-xl p-4 mb-6">
+      <div className="bg-slate-900/40 border border-slate-700 rounded-xl p-4 mb-5">
         <div className="text-xs text-slate-400 uppercase tracking-wider mb-1">Import depuis un fichier Excel / CSV</div>
-        <div className="text-[10px] text-slate-500 mb-3">Colonne attendue : <span className="text-slate-300">Nom Prénom</span> (ou colonnes séparées Prénom / Nom) + <span className="text-slate-300">Date de naissance</span></div>
+        <div className="text-[10px] text-slate-500 mb-3">
+          Colonnes : <span className="text-slate-300">Nom Prénom</span> (ou Prénom + Nom séparés) · <span className="text-slate-300">Date de naissance</span> · <span className="text-slate-300">Statut</span> (optionnel)
+        </div>
         <div className="flex flex-wrap gap-2 mb-3">
           <button onClick={downloadTemplate} className="text-xs text-blue-400 hover:text-blue-300 border border-blue-800/60 hover:border-blue-600 px-3 py-1.5 rounded-lg transition-colors">⬇ Télécharger le modèle CSV</button>
           <button onClick={() => fileRef.current?.click()} className="text-xs text-emerald-400 hover:text-emerald-300 border border-emerald-800/60 hover:border-emerald-600 px-3 py-1.5 rounded-lg transition-colors">📂 Importer un fichier (.xlsx / .csv)</button>
@@ -1046,13 +1036,15 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport }: { project: 
         {importMsg && <div className={`text-xs mb-2 ${importMsg.startsWith("✅") ? "text-emerald-400" : "text-red-400"}`}>{importMsg}</div>}
         {showPreview && importPreview.length > 0 && (
           <div className="mt-3 bg-slate-800/60 rounded-xl p-3">
-            <div className="text-xs text-slate-400 mb-2">Aperçu — <span className="text-white">prénom</span> · nom · date</div>
+            <div className="text-xs text-slate-400 mb-2">Aperçu — vérifiez avant d&apos;importer :</div>
             <div className="space-y-1 max-h-48 overflow-y-auto">
               {importPreview.map((c, i) => (
-                <div key={i} className="text-xs flex gap-3 items-center">
-                  <span className="text-white font-semibold">{c.firstName}</span>
-                  <span className="text-slate-300">{c.lastName}</span>
+                <div key={i} className="text-xs flex gap-3 items-center flex-wrap">
+                  {/* Fix #3: show full name as imported */}
+                  <span className="text-white font-semibold">{c.firstName} {c.lastName}</span>
                   <span className="text-slate-500">{c.dob}</span>
+                  {/* Fix #5: show detected role */}
+                  {c.role && <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold border ${ROLE_COLORS[c.role as ChildRole]}`}>{ROLE_LABELS[c.role as ChildRole]}</span>}
                   {c.vacationPeriods.length > 0 && <span className="text-amber-400">🌴 {c.vacationPeriods[0].start} → {c.vacationPeriods[0].end}</span>}
                 </div>
               ))}
@@ -1067,24 +1059,51 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport }: { project: 
         )}
       </div>
 
+      {/* Fix #1: Role tabs in children list */}
+      {project.children.length > 0 && rolesPresent.length > 0 && (
+        <div className="flex gap-1 mb-4 border-b border-slate-800">
+          <button onClick={() => setRoleTab("all")}
+            className={`px-4 py-2 text-sm transition-colors border-b-2 ${roleTab === "all" ? "border-blue-500 text-white" : "border-transparent text-slate-500 hover:text-slate-300"}`}>
+            Tous ({project.children.length})
+          </button>
+          {rolesPresent.map(r => (
+            <button key={r} onClick={() => setRoleTab(r)}
+              className={`px-4 py-2 text-sm transition-colors border-b-2 ${roleTab === r ? "border-blue-500 text-white" : "border-transparent text-slate-500 hover:text-slate-300"}`}>
+              {ROLE_LABELS[r]} ({project.children.filter(c => c.role === r).length})
+            </button>
+          ))}
+          {project.children.some(c => !c.role) && (
+            <button onClick={() => setRoleTab("all")}
+              className={`px-4 py-2 text-sm transition-colors border-b-2 border-transparent text-slate-500 hover:text-slate-300`}>
+              Sans statut ({project.children.filter(c => !c.role).length})
+            </button>
+          )}
+        </div>
+      )}
+
       {project.children.length === 0
         ? <div className="text-slate-500 text-center py-12 text-sm">Aucun enfant enregistré</div>
-        : <div className="space-y-3">{project.children.map(c => (
-          <div key={c.id} className="flex items-center gap-4 bg-slate-900/50 border border-slate-700 rounded-xl px-5 py-4">
-            <div className="w-10 h-10 rounded-full bg-blue-900/60 flex items-center justify-center text-blue-300 font-bold text-sm">{c.first_name?.[0]}{c.last_name?.[0]}</div>
-            <div className="flex-1">
-              <div className="font-semibold text-white">{c.first_name} {c.last_name}</div>
-              <div className="text-xs text-slate-400">{getAge(c.dob)} ans · tranche {getAgeBand(c.dob)} ans</div>
-              {c.vacation_periods?.length > 0 && <div className="text-xs text-amber-400 mt-0.5">{c.vacation_periods.length} période(s) de vacances</div>}
+        : filteredChildren.length === 0
+          ? <div className="text-slate-500 text-center py-8 text-sm">Aucun enfant dans cette catégorie</div>
+          : <div className="space-y-3">{filteredChildren.map(c => (
+            <div key={c.id} className="flex items-center gap-4 bg-slate-900/50 border border-slate-700 rounded-xl px-5 py-4">
+              {/* Fix #1: visual role indicator on left border */}
+              {c.role && <div className={`w-1 self-stretch rounded-full flex-shrink-0 ${c.role === "role" ? "bg-purple-500" : c.role === "silhouette" ? "bg-cyan-500" : "bg-orange-500"}`} />}
+              <div className="w-10 h-10 rounded-full bg-blue-900/60 flex items-center justify-center text-blue-300 font-bold text-sm flex-shrink-0">{c.first_name?.[0]}{c.last_name?.[0]}</div>
+              <div className="flex-1">
+                <div className="font-semibold text-white">{c.first_name} {c.last_name}</div>
+                <div className="text-xs text-slate-400">{getAge(c.dob)} ans · tranche {getAgeBand(c.dob)} ans</div>
+                {c.vacation_periods?.length > 0 && <div className="text-xs text-amber-400 mt-0.5">{c.vacation_periods.length} période(s) de vacances</div>}
+              </div>
+              {/* Fix #1: role badge always visible */}
+              <div className="flex gap-1.5 flex-wrap justify-end">
+                <Badge color="blue">{getAgeBand(c.dob)} ans</Badge>
+                {c.role ? <RoleBadge role={c.role} /> : <span className="text-[10px] text-slate-500">—</span>}
+              </div>
+              <button onClick={() => onEdit(c)} className="text-slate-400 hover:text-white">✏️</button>
+              <button onClick={() => onRemove(c.id)} className="text-slate-500 hover:text-red-400">✕</button>
             </div>
-            <div className="flex gap-1.5 flex-wrap justify-end">
-              <Badge color="blue">{getAgeBand(c.dob)} ans</Badge>
-              {c.role && <RoleBadge role={c.role} />}
-            </div>
-            <button onClick={() => onEdit(c)} className="text-slate-400 hover:text-white">✏️</button>
-            <button onClick={() => onRemove(c.id)} className="text-slate-500 hover:text-red-400">✕</button>
-          </div>
-        ))}</div>
+          ))}</div>
       }
     </div>
   );
@@ -1154,6 +1173,7 @@ function GroupsTab({ project, onAdd, onRemove, onUpdateGroup }: { project: Proje
                             <span className="text-sm text-slate-200 flex-1">{c.first_name} {c.last_name}</span>
                             <div className="flex gap-1 flex-wrap">
                               <Badge color="blue">{getAgeBand(c.dob)} ans</Badge>
+                              {c.role && <RoleBadge role={c.role} />}
                               {otherGroups.map(gn => (
                                 <span key={gn} className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-slate-600/60 text-slate-300 border border-slate-500">👥 {gn}</span>
                               ))}
@@ -1231,8 +1251,7 @@ function SettingsTab({ rules, onUpdateRules }: { rules: Rules; onUpdateRules: (f
   );
 }
 
-// ─── Modals ───────────────────────────────────────────────────────────────────
-// Fix #1: single fullName field
+// ─── Child Form Modal — Fix #4 (required fields) ──────────────────────────────
 function ChildFormModal({ child, onSave, onClose }: { child: Child | null; onSave: (d: any) => void; onClose: () => void }) {
   const [form, setForm] = useState({
     fullName: child ? `${child.first_name} ${child.last_name}`.trim() : "",
@@ -1241,18 +1260,29 @@ function ChildFormModal({ child, onSave, onClose }: { child: Child | null; onSav
     role: (child?.role || "") as ChildRole | "",
   });
   const [newVac, setNewVac] = useState({ start: "", end: "" });
+  const [error, setError]   = useState("");
+
+  function handleSave() {
+    // Fix #4: validate required fields
+    if (!form.fullName.trim()) { setError("Le prénom et nom sont obligatoires."); return; }
+    if (!form.dob) { setError("La date de naissance est obligatoire."); return; }
+    setError("");
+    onSave({ ...form, role: form.role || undefined });
+  }
 
   return (
     <Modal title={child ? "Modifier l'enfant" : "Ajouter un enfant"} onClose={onClose}>
       <div className="space-y-4">
-        {/* Fix #1: single name field */}
-        <TextInput label="Prénom Nom" value={form.fullName} onChange={e => setForm(f => ({ ...f, fullName: e.target.value }))} placeholder="Ex: Léa Martin" />
-        <TextInput label="Date de naissance" type="date" value={form.dob} onChange={e => setForm(f => ({ ...f, dob: e.target.value }))} />
+        {/* Fix #4: required indicator */}
+        <TextInput label="Prénom Nom" required value={form.fullName} onChange={e => setForm(f => ({ ...f, fullName: e.target.value }))} placeholder="Ex: Léa Martin" />
+        <TextInput label="Date de naissance" required type="date" value={form.dob} onChange={e => setForm(f => ({ ...f, dob: e.target.value }))} />
         {form.dob && <div className="bg-blue-900/30 border border-blue-700/60 rounded-lg px-4 py-2 text-sm text-blue-300">{getAge(form.dob)} ans · Tranche DRIEETS : {getAgeBand(form.dob)} ans</div>}
 
-        {/* Role selector */}
+        {/* Fix #4: statut is optional */}
         <div className="flex flex-col gap-1">
-          <label className="text-[10px] text-slate-400 uppercase tracking-[0.15em] font-semibold">Statut</label>
+          <label className="text-[10px] text-slate-400 uppercase tracking-[0.15em] font-semibold">
+            Statut <span className="text-slate-600 normal-case font-normal">(optionnel)</span>
+          </label>
           <div className="flex gap-2 flex-wrap">
             {(["", "role", "silhouette", "figurant"] as const).map(r => (
               <button key={r} type="button"
@@ -1266,8 +1296,11 @@ function ChildFormModal({ child, onSave, onClose }: { child: Child | null; onSav
           </div>
         </div>
 
+        {/* Fix #4: vacances is optional */}
         <div>
-          <label className="text-[10px] text-slate-400 uppercase tracking-wider block mb-2">Périodes de vacances</label>
+          <label className="text-[10px] text-slate-400 uppercase tracking-wider block mb-2">
+            Périodes de vacances <span className="text-slate-600 normal-case font-normal">(optionnel)</span>
+          </label>
           {form.vacationPeriods.map((p, i) => (
             <div key={i} className="flex items-center gap-2 mb-1 text-sm text-slate-300">
               <span>{p.start} → {p.end}</span>
@@ -1280,7 +1313,12 @@ function ChildFormModal({ child, onSave, onClose }: { child: Child | null; onSav
             <button onClick={() => { if (newVac.start && newVac.end) { setForm(f => ({ ...f, vacationPeriods: [...f.vacationPeriods, newVac] })); setNewVac({ start: "", end: "" }); } }} className="bg-slate-700 hover:bg-slate-600 text-white px-3 rounded-lg h-9 text-sm">+</button>
           </div>
         </div>
-        <Btn className="w-full justify-center" onClick={() => { if (!form.fullName.trim() || !form.dob) return; onSave({ ...form, role: form.role || undefined }); }}>
+
+        {error && <div className="text-xs text-red-400 bg-red-900/20 border border-red-800 rounded-lg px-3 py-2">{error}</div>}
+
+        <div className="text-[10px] text-slate-500">Les champs marqués <span className="text-red-400">*</span> sont obligatoires</div>
+
+        <Btn className="w-full justify-center" onClick={handleSave}>
           {child ? "Enregistrer" : "Ajouter l'enfant"}
         </Btn>
       </div>
@@ -1301,7 +1339,7 @@ function GroupFormModal({ group, onSave, onClose }: { group: Group | null; onSav
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// SHOOTING VIEW — Fix #2, #3
+// SHOOTING VIEW
 // ═════════════════════════════════════════════════════════════════════════════
 function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSession, onCancelSession, onApplyEvent, onCancelLastEvent, onEndSessions, onReopenSession, onToggleChild, onAddGroup, onRemoveGroup, onEditEventTime, onEditStartTime, onEditEndTime, onExportXLSX, onExportPDF }: {
   project: Project; dateStr: string; onBack: () => void;
@@ -1326,7 +1364,6 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
   const [selected, setSelected]     = useState<Set<string>>(new Set());
   const [actionModal, setActionModal] = useState<{ type: "start" | "pause" | "resume" | "end" } | null>(null);
   const [search, setSearch]         = useState("");
-  // Fix #3: role tab
   const [roleTab, setRoleTab]       = useState<ChildRole | "all">("all");
 
   useEffect(() => { const t = setInterval(() => setTick(n => n + 1), 15000); return () => clearInterval(t); }, []);
@@ -1337,12 +1374,9 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
   const rules    = project.rules;
   const dateLabel = new Date(dateStr + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
 
-  // Fix #3: compute which role tabs have children
   const childrenInDay = childIds.map(id => project.children.find(c => c.id === id)).filter(Boolean) as Child[];
   const rolesPresent  = ALL_ROLES.filter(r => childrenInDay.some(c => c.role === r));
-  const hasNoRole     = childrenInDay.some(c => !c.role);
 
-  // Filter by search + role tab
   const filteredIds = childIds.filter(id => {
     const c = project.children.find(ch => ch.id === id); if (!c) return false;
     if (search.trim()) {
@@ -1362,7 +1396,6 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
 
   return (
     <div className="min-h-screen bg-[#080d16] text-white" style={{ fontFamily: "'DM Mono', monospace" }}>
-      {/* Header */}
       <div className="border-b border-slate-800 px-6 py-4 flex items-center gap-4">
         <button onClick={onBack} className="text-slate-400 hover:text-white text-sm">← {project.name}</button>
         <div className="flex-1">
@@ -1376,7 +1409,6 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
       </div>
 
       <div className="max-w-4xl mx-auto px-6 py-6">
-        {/* Manage children — Fix #2: add/remove group buttons */}
         <div className="mb-5">
           <button onClick={() => setAdding(v => !v)} className="text-sm text-blue-400 hover:text-blue-300 border border-blue-800/60 hover:border-blue-600 px-4 py-2 rounded-lg transition-colors">
             {addingChildren ? "✕ Fermer" : "+ Gérer les enfants de la journée"}
@@ -1392,16 +1424,13 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
                       const groupPartial = !groupInDay && g.child_ids.some(id => childIds.includes(id));
                       return (
                         <div key={g.id} className="flex items-center gap-2">
-                          {/* Fix #2: add/remove group */}
                           <button onClick={() => onAddGroup(g.id)}
                             className={`text-sm px-3 py-1.5 rounded-lg border transition-colors ${groupInDay ? "bg-blue-900/50 border-blue-600 text-blue-300" : "bg-slate-800 border-slate-600 text-slate-300 hover:border-blue-600 hover:text-blue-300"}`}>
                             + {g.name} ({g.child_ids?.length || 0})
                             {groupPartial && <span className="text-amber-400 text-xs ml-1">partiel</span>}
                           </button>
                           {(groupInDay || groupPartial) && (
-                            <button onClick={() => onRemoveGroup(g.id)} className="text-xs text-red-400 hover:text-red-300 border border-red-800/60 hover:border-red-600 px-2 py-1.5 rounded-lg transition-colors">
-                              − Retirer
-                            </button>
+                            <button onClick={() => onRemoveGroup(g.id)} className="text-xs text-red-400 hover:text-red-300 border border-red-800/60 hover:border-red-600 px-2 py-1.5 rounded-lg transition-colors">− Retirer</button>
                           )}
                         </div>
                       );
@@ -1422,7 +1451,6 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
           )}
         </div>
 
-        {/* Search */}
         {childIds.length > 0 && (
           <div className="mb-4">
             <input type="text" placeholder="🔍 Rechercher un enfant…" value={search} onChange={e => setSearch(e.target.value)}
@@ -1430,23 +1458,19 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
           </div>
         )}
 
-        {/* Fix #3: Role tabs — only show if multiple roles present */}
-        {childIds.length > 0 && (rolesPresent.length > 0 || hasNoRole) && (
-          <div className="flex gap-1 mb-5 border-b border-slate-800 pb-0">
-            <button onClick={() => setRoleTab("all")}
-              className={`px-4 py-2 text-sm rounded-t-lg transition-colors border-b-2 ${roleTab === "all" ? "border-blue-500 text-white" : "border-transparent text-slate-500 hover:text-slate-300"}`}>
+        {childIds.length > 0 && rolesPresent.length > 0 && (
+          <div className="flex gap-1 mb-5 border-b border-slate-800">
+            <button onClick={() => setRoleTab("all")} className={`px-4 py-2 text-sm transition-colors border-b-2 ${roleTab === "all" ? "border-blue-500 text-white" : "border-transparent text-slate-500 hover:text-slate-300"}`}>
               Tous ({childrenInDay.length})
             </button>
             {rolesPresent.map(r => (
-              <button key={r} onClick={() => setRoleTab(r)}
-                className={`px-4 py-2 text-sm rounded-t-lg transition-colors border-b-2 ${roleTab === r ? "border-blue-500 text-white" : "border-transparent text-slate-500 hover:text-slate-300"}`}>
+              <button key={r} onClick={() => setRoleTab(r)} className={`px-4 py-2 text-sm transition-colors border-b-2 ${roleTab === r ? "border-blue-500 text-white" : "border-transparent text-slate-500 hover:text-slate-300"}`}>
                 {ROLE_LABELS[r]} ({childrenInDay.filter(c => c.role === r).length})
               </button>
             ))}
           </div>
         )}
 
-        {/* Selection toolbar */}
         {childIds.length > 0 && (
           <div className="bg-slate-900/60 border border-slate-700 rounded-xl px-5 py-3 mb-5 flex flex-wrap items-center gap-3">
             <span className="text-xs text-slate-400 font-semibold">Sélection :</span>
@@ -1537,7 +1561,6 @@ function TimeActionModal({ type, childCount, dateStr, onConfirm, onClose }: { ty
   );
 }
 
-// ─── Child Card ───────────────────────────────────────────────────────────────
 function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, vacation, isSelected, onSelect, onStart, onCancelSession, onCancelLastEvent, onReopenSession, onEditEventTime, onEditStartTime, onEditEndTime, dateStr }: {
   child: Child; session: Session | undefined; stats: SessionStats | null;
   maxWork: number; breakAfter: number; maxAmplitude: number; vacation: boolean;
@@ -1645,7 +1668,6 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
     </div>
   );
 }
-
 function TimelineRow({ label, iso, isEditing, editTime, onEdit, onTimeChange, onConfirm, onCancel }: { label: string; iso: string | undefined; isEditing: boolean; editTime: string; onEdit: () => void; onTimeChange: (t: string) => void; onConfirm: () => void; onCancel: () => void }) {
   return (
     <div className="flex items-center gap-2 text-xs">
@@ -1680,4 +1702,3 @@ function SingleStartButton({ onStart, dateStr }: { onStart: (t?: string) => void
     </div>
   );
 }
-
