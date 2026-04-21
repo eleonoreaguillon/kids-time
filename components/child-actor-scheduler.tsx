@@ -114,6 +114,8 @@ const ROLE_COLORS: Record<ChildRole, string> = {
   figurant: "bg-orange-900/40 text-orange-300 border-orange-700",
 };
 
+const ALL_ROLES: ChildRole[] = ["role", "silhouette", "figurant"];
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function getAge(dob: string): number {
   const t = new Date(), b = new Date(dob);
@@ -164,6 +166,14 @@ function normalize(s: string): string {
   return s.toLowerCase().trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
+// Fix #1: split full name — first word = prénom, rest = nom
+function splitFullName(full: string): { firstName: string; lastName: string } {
+  const parts = full.trim().split(/\s+/);
+  if (parts.length === 0) return { firstName: "", lastName: "" };
+  if (parts.length === 1) return { firstName: parts[0], lastName: "" };
+  return { firstName: parts[0], lastName: parts.slice(1).join(" ") };
+}
+
 function computeSessionStats(session: Session | undefined, rules: Rules): SessionStats | null {
   if (!session?.start_time) return null;
   const now   = session.end_time ? new Date(session.end_time) : new Date();
@@ -175,15 +185,12 @@ function computeSessionStats(session: Session | undefined, rules: Rules): Sessio
 
   for (const ev of events) {
     const t = new Date(ev.time), dur = Math.floor((t.getTime() - lastRef.getTime()) / 60000);
-    if (ev.type === "pause_start") {
-      workMin += dur;
-      lastRef = t;
-    } else if (ev.type === "pause_end") {
+    if (ev.type === "pause_start") { workMin += dur; lastRef = t; }
+    else if (ev.type === "pause_end") {
       const valid = dur >= rules.minBreakMinutes;
       breakSlots.push({ start: lastRef.toISOString(), end: t.toISOString(), durationMin: dur, valid });
       if (valid) validBreakMin += dur; else workMin += dur;
-      breakMin += dur;
-      lastRef = t;
+      breakMin += dur; lastRef = t;
     }
   }
 
@@ -200,30 +207,30 @@ function computeSessionStats(session: Session | undefined, rules: Rules): Sessio
     const last = [...events].reverse().find(e => e.type === "pause_end");
     timeSinceBreak = Math.floor((now.getTime() - new Date(last ? last.time : session.start_time).getTime()) / 60000);
   }
-
   return { amplitudeMin, workMin, breakMin, validBreakMin, timeSinceBreak, start, now, breakSlots };
 }
 
-// ─── Export helpers ───────────────────────────────────────────────────────────
-function exportDayToXLSX(project: Project, dateStr: string) {
+// ─── Export ───────────────────────────────────────────────────────────────────
+function buildExportRows(project: Project, dateStr: string, filterRole?: ChildRole) {
   const day = project.shootingDays[dateStr];
-  if (!day) return;
+  if (!day) return [];
   const rows: any[] = [];
   for (const childId of day.child_ids || []) {
     const child = project.children.find(c => c.id === childId);
     if (!child) continue;
-    const session = day.sessions?.[childId];
+    if (filterRole && child.role !== filterRole) continue;
+    const session  = day.sessions?.[childId];
     const vacation = isVacation(child, dateStr);
-    const band = getAgeBand(child.dob);
+    const band     = getAgeBand(child.dob);
     const period: Period = vacation ? "vacation" : "school";
-    const maxWork = project.rules.maxWorkMinutes[band][period];
-    const maxAmp  = project.rules.maxAmplitudeMinutes;
-    const stats   = computeSessionStats(session, project.rules);
-    const breakSlotsStr = stats?.breakSlots.map(b => `${formatTime(b.start)}-${formatTime(b.end)} (${formatMinutes(b.durationMin)}${b.valid ? "" : " ⚠non valide"})`).join(" / ") || "--";
-    const workOver  = stats ? Math.max(0, stats.workMin - maxWork) : 0;
-    const ampOver   = stats ? Math.max(0, stats.amplitudeMin - maxAmp) : 0;
+    const maxWork  = project.rules.maxWorkMinutes[band][period];
+    const maxAmp   = project.rules.maxAmplitudeMinutes;
+    const stats    = computeSessionStats(session, project.rules);
+    const breakSlotsStr = stats?.breakSlots.map(b => `${formatTime(b.start)}-${formatTime(b.end)} (${formatMinutes(b.durationMin)}${b.valid ? "" : " ⚠"})`).join(" / ") || "--";
+    const workOver = stats ? Math.max(0, stats.workMin - maxWork) : 0;
+    const ampOver  = stats ? Math.max(0, stats.amplitudeMin - maxAmp) : 0;
     rows.push({
-      "Nom":                        `${child.last_name} ${child.first_name}`,
+      "Nom Prénom":                 `${child.last_name} ${child.first_name}`,
       "Statut":                     child.role ? ROLE_LABELS[child.role] : "--",
       "Date de naissance":          child.dob,
       "Tranche d'âge":              band,
@@ -239,21 +246,57 @@ function exportDayToXLSX(project: Project, dateStr: string) {
       "Amplitude de présence":      stats ? formatMinutes(stats.amplitudeMin) : "--",
       "Amplitude autorisée":        formatMinutes(maxAmp),
       "Dépassement amplitude":      ampOver > 0 ? formatMinutes(ampOver) : "0",
+      "_child": child, "_session": session, "_stats": stats, "_maxWork": maxWork, "_maxAmp": maxAmp, "_vacation": vacation, "_band": band,
     });
   }
-  const headers = Object.keys(rows[0] || {});
-  const csv = [
+  return rows;
+}
+
+// Fix #3: export with separate sheets per role
+function exportDayToXLSX(project: Project, dateStr: string) {
+  const day = project.shootingDays[dateStr];
+  if (!day) return;
+
+  const allRows = buildExportRows(project, dateStr);
+  const clean = (rows: any[]) => rows.map(r => {
+    const o: any = {};
+    for (const k of Object.keys(r)) { if (!k.startsWith("_")) o[k] = r[k]; }
+    return o;
+  });
+
+  const headers = Object.keys(allRows[0] || {}).filter(k => !k.startsWith("_"));
+  const toCsv = (rows: any[]) => [
     headers.join(";"),
     ...rows.map(r => headers.map(h => `"${String(r[h] || "").replace(/"/g, '""')}"`).join(";")),
   ].join("\n");
+
   if (typeof window !== "undefined" && (window as any).XLSX) {
     const XLSX = (window as any).XLSX;
-    const ws = XLSX.utils.json_to_sheet(rows);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Récapitulatif");
+    const wb   = XLSX.utils.book_new();
+
+    // All children sheet
+    const wsAll = XLSX.utils.json_to_sheet(clean(allRows));
+    XLSX.utils.book_append_sheet(wb, wsAll, "Tous");
+
+    // One sheet per role that has children
+    for (const role of ALL_ROLES) {
+      const roleRows = allRows.filter(r => r._child?.role === role);
+      if (roleRows.length > 0) {
+        const ws = XLSX.utils.json_to_sheet(clean(roleRows));
+        XLSX.utils.book_append_sheet(wb, ws, ROLE_LABELS[role]);
+      }
+    }
+    // Sheet for children without role
+    const noRoleRows = allRows.filter(r => !r._child?.role);
+    if (noRoleRows.length > 0) {
+      const ws = XLSX.utils.json_to_sheet(clean(noRoleRows));
+      XLSX.utils.book_append_sheet(wb, ws, "Non défini");
+    }
+
     XLSX.writeFile(wb, `KidsTime_${dateStr}_${project.name}.xlsx`);
   } else {
-    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    // CSV fallback — all children
+    const blob = new Blob(["\uFEFF" + toCsv(allRows)], { type: "text/csv;charset=utf-8;" });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement("a");
     a.href = url; a.download = `KidsTime_${dateStr}_${project.name}.csv`; a.click();
@@ -261,41 +304,19 @@ function exportDayToXLSX(project: Project, dateStr: string) {
   }
 }
 
+// Fix #3: PDF with sections per role
 function exportDayToPDF(project: Project, dateStr: string) {
   const day = project.shootingDays[dateStr];
   if (!day) return;
   const dateLabel = new Date(dateStr + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-  let html = `<html><head><meta charset="utf-8">
-  <style>
-    body { font-family: Arial, sans-serif; font-size: 11px; color: #111; padding: 20px; }
-    h1 { font-size: 18px; margin-bottom: 4px; }
-    h2 { font-size: 13px; color: #444; margin-bottom: 16px; font-weight: normal; }
-    table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
-    th { background: #1e3a5f; color: white; padding: 7px 8px; text-align: left; font-size: 10px; }
-    td { padding: 6px 8px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
-    tr:nth-child(even) td { background: #f8fafc; }
-    .over { color: #dc2626; font-weight: bold; }
-    .ok { color: #16a34a; }
-    .footer { margin-top: 30px; font-size: 9px; color: #999; text-align: center; }
-  </style></head><body>
-  <h1>KidsTime — Récapitulatif journée</h1>
-  <h2>${dateLabel} &nbsp;·&nbsp; ${project.name}</h2>`;
 
-  for (const childId of day.child_ids || []) {
-    const child = project.children.find(c => c.id === childId);
-    if (!child) continue;
-    const session = day.sessions?.[childId];
-    const vacation = isVacation(child, dateStr);
-    const band = getAgeBand(child.dob);
-    const period: Period = vacation ? "vacation" : "school";
-    const maxWork = project.rules.maxWorkMinutes[band][period];
-    const maxAmp  = project.rules.maxAmplitudeMinutes;
-    const stats   = computeSessionStats(session, project.rules);
+  const childTable = (row: any) => {
+    const { _child: child, _session: session, _stats: stats, _maxWork: maxWork, _maxAmp: maxAmp, _vacation: vacation, _band: band } = row;
     const workOver = stats ? Math.max(0, stats.workMin - maxWork) : 0;
     const ampOver  = stats ? Math.max(0, stats.amplitudeMin - maxAmp) : 0;
-    const breakSlotsStr = stats?.breakSlots.map(b => `${formatTime(b.start)}-${formatTime(b.end)} (${formatMinutes(b.durationMin)}${b.valid ? "" : " ⚠"})`).join("<br>") || "--";
-    html += `<table>
-      <tr><th colspan="4">${child.last_name} ${child.first_name}${child.role ? ` — ${ROLE_LABELS[child.role]}` : ""} — ${getAge(child.dob)} ans (${band} ans) — ${vacation ? "Vacances" : "Scolaire"}</th></tr>
+    const breakSlotsStr = stats?.breakSlots.map((b: any) => `${formatTime(b.start)}-${formatTime(b.end)} (${formatMinutes(b.durationMin)}${b.valid ? "" : " ⚠"})`).join("<br>") || "--";
+    return `<table>
+      <tr><th colspan="4">${child.last_name} ${child.first_name}${child.role ? ` — ${ROLE_LABELS[child.role as ChildRole]}` : ""} — ${getAge(child.dob)} ans (${band} ans) — ${vacation ? "Vacances" : "Scolaire"}</th></tr>
       <tr>
         <td><b>Heure de convocation</b><br>${session?.start_time ? formatTime(session.start_time) : "--"}</td>
         <td><b>Heure de fin</b><br>${session?.end_time ? formatTime(session.end_time) : "--"}</td>
@@ -314,13 +335,48 @@ function exportDayToPDF(project: Project, dateStr: string) {
         <td colspan="2"><b>Plages horaires des pauses</b><br>${breakSlotsStr}</td>
       </tr>
     </table>`;
+  };
+
+  const allRows = buildExportRows(project, dateStr);
+
+  let html = `<html><head><meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; font-size: 11px; color: #111; padding: 20px; }
+    h1 { font-size: 18px; margin-bottom: 4px; }
+    h2 { font-size: 13px; color: #444; margin-bottom: 16px; font-weight: normal; }
+    h3 { font-size: 12px; color: #1e3a5f; border-bottom: 2px solid #1e3a5f; padding-bottom: 4px; margin: 20px 0 10px; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+    th { background: #1e3a5f; color: white; padding: 7px 8px; text-align: left; font-size: 10px; }
+    td { padding: 6px 8px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
+    tr:nth-child(even) td { background: #f8fafc; }
+    .over { color: #dc2626; font-weight: bold; }
+    .ok { color: #16a34a; }
+    .footer { margin-top: 30px; font-size: 9px; color: #999; text-align: center; }
+    @media print { h3 { page-break-before: auto; } }
+  </style></head><body>
+  <h1>KidsTime — Récapitulatif journée</h1>
+  <h2>${dateLabel} &nbsp;·&nbsp; ${project.name}</h2>`;
+
+  // Group by role in PDF
+  for (const role of ALL_ROLES) {
+    const roleRows = allRows.filter(r => r._child?.role === role);
+    if (roleRows.length > 0) {
+      html += `<h3>${ROLE_LABELS[role]} (${roleRows.length})</h3>`;
+      html += roleRows.map(childTable).join("");
+    }
   }
+  const noRoleRows = allRows.filter(r => !r._child?.role);
+  if (noRoleRows.length > 0) {
+    html += `<h3>Statut non défini (${noRoleRows.length})</h3>`;
+    html += noRoleRows.map(childTable).join("");
+  }
+
   html += `<div class="footer">Généré par KidsTime · Éléonore Aguillon · ACMA Fiction · ${new Date().toLocaleDateString("fr-FR")}</div></body></html>`;
   const w = window.open("", "_blank");
   if (w) { w.document.write(html); w.document.close(); setTimeout(() => w.print(), 500); }
 }
 
-// ─── Excel import helper ──────────────────────────────────────────────────────
+// ─── Excel import ──────────────────────────────────────────────────────────────
 function parseExcelDate(val: any): string {
   if (!val) return "";
   if (typeof val === "number") {
@@ -329,12 +385,10 @@ function parseExcelDate(val: any): string {
   }
   if (typeof val === "string") {
     const trimmed = val.trim();
-    // dd/mm/yyyy
     if (/^\d{2}\/\d{2}\/\d{4}$/.test(trimmed)) {
       const [d, m, y] = trimmed.split("/");
       return `${y}-${m}-${d}`;
     }
-    // yyyy-mm-dd
     if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
     const parsed = new Date(trimmed);
     if (!isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
@@ -350,15 +404,6 @@ function guessColumn(headers: string[], candidates: string[]): string | null {
     if (idx !== -1) return headers[idx];
   }
   return null;
-}
-
-// Improved name parsing — tries to separate first/last name intelligently
-function parseFullName(raw: string): { firstName: string; lastName: string } {
-  const parts = raw.trim().split(/\s+/);
-  if (parts.length === 0) return { firstName: "", lastName: "" };
-  if (parts.length === 1) return { firstName: parts[0], lastName: "" };
-  // Assume first word = first name, rest = last name
-  return { firstName: parts[0], lastName: parts.slice(1).join(" ") };
 }
 
 // ─── UI Primitives ────────────────────────────────────────────────────────────
@@ -423,24 +468,18 @@ function Btn({ children, variant = "primary", className = "", ...props }: { chil
 // ═════════════════════════════════════════════════════════════════════════════
 export default function App() {
   const [session, setSession] = useState<any>(undefined);
-
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_ev, s) => setSession(s));
     return () => subscription.unsubscribe();
   }, []);
-
-  if (session === undefined) return (
-    <div className="min-h-screen bg-[#080d16] flex items-center justify-center">
-      <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-    </div>
-  );
+  if (session === undefined) return <div className="min-h-screen bg-[#080d16] flex items-center justify-center"><div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" /></div>;
   if (!session) return <AuthPage onAuth={setSession} />;
   return <MainApp session={session} onSignOut={() => supabase.auth.signOut()} />;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// AUTH PAGE
+// AUTH
 // ═════════════════════════════════════════════════════════════════════════════
 function AuthPage({ onAuth }: { onAuth: (s: any) => void }) {
   const [mode, setMode]       = useState<"login" | "signup">("login");
@@ -454,13 +493,11 @@ function AuthPage({ onAuth }: { onAuth: (s: any) => void }) {
     try {
       if (mode === "login") {
         const { data, error } = await supabase.auth.signInWithPassword({ email, password: pass });
-        if (error) throw error;
-        onAuth(data.session);
+        if (error) throw error; onAuth(data.session);
       } else {
         const { error } = await supabase.auth.signUp({ email, password: pass });
         if (error) throw error;
-        setError("✅ Compte créé ! Vérifiez votre e-mail puis connectez-vous.");
-        setMode("login");
+        setError("✅ Compte créé ! Vérifiez votre e-mail puis connectez-vous."); setMode("login");
       }
     } catch (err: any) { setError(err.message); }
     setLoading(false);
@@ -472,9 +509,7 @@ function AuthPage({ onAuth }: { onAuth: (s: any) => void }) {
       <div className="fixed inset-0 opacity-[0.025]" style={{ backgroundImage: "linear-gradient(#fff 1px,transparent 1px),linear-gradient(90deg,#fff 1px,transparent 1px)", backgroundSize: "40px 40px" }} />
       <div className="relative z-10 mb-10 text-center">
         <div className="text-[10px] text-blue-400 tracking-[0.4em] uppercase mb-2">Audiovisuel · Mineurs</div>
-        <h1 className="text-6xl font-extrabold tracking-tight" style={{ fontFamily: "Syne, sans-serif" }}>
-          <span className="text-white">KIDS</span><span className="text-blue-500">TIME</span>
-        </h1>
+        <h1 className="text-6xl font-extrabold tracking-tight" style={{ fontFamily: "Syne, sans-serif" }}><span className="text-white">KIDS</span><span className="text-blue-500">TIME</span></h1>
         <div className="mt-6 max-w-sm mx-auto text-slate-400 text-sm leading-relaxed border-t border-slate-800 pt-5">
           Bonjour et bienvenue sur cet outil de travail dédié aux coachs et aux responsables enfants qui exercent dans l&apos;audiovisuel.
           <div className="mt-3 text-blue-400 font-semibold text-xs tracking-wider">Éléonore Aguillon · ACMA Fiction</div>
@@ -483,8 +518,7 @@ function AuthPage({ onAuth }: { onAuth: (s: any) => void }) {
       <div className="relative z-10 w-full max-w-sm bg-slate-900/70 border border-slate-700 rounded-2xl p-7 backdrop-blur">
         <div className="flex mb-6 bg-slate-800 rounded-xl p-1">
           {(["login", "signup"] as const).map(m => (
-            <button key={m} onClick={() => { setMode(m); setError(""); }}
-              className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-all ${mode === m ? "bg-blue-600 text-white" : "text-slate-400 hover:text-white"}`}>
+            <button key={m} onClick={() => { setMode(m); setError(""); }} className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-all ${mode === m ? "bg-blue-600 text-white" : "text-slate-400 hover:text-white"}`}>
               {m === "login" ? "Connexion" : "Créer un compte"}
             </button>
           ))}
@@ -516,8 +550,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
   const loadProjects = useCallback(async () => {
     setLoading(true);
     const { data } = await supabase.from("projects").select("*").eq("user_id", userId).order("created_at");
-    setProjects((data || []) as Project[]);
-    setLoading(false);
+    setProjects((data || []) as Project[]); setLoading(false);
   }, [userId]);
 
   useEffect(() => { loadProjects(); }, [loadProjects]);
@@ -535,15 +568,13 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
   }
 
   async function openProject(id: string) {
-    setLoading(true);
-    const f = await loadFullProject(id);
+    setLoading(true); const f = await loadFullProject(id);
     setActiveProject(f); setView("project"); setLoading(false);
   }
 
   async function refreshActive() {
     if (!activeProject) return;
-    const f = await loadFullProject(activeProject.id);
-    setActiveProject(f);
+    const f = await loadFullProject(activeProject.id); setActiveProject(f);
   }
 
   async function createProject(name: string) {
@@ -551,42 +582,40 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     if (data) { await loadProjects(); openProject(data.id); }
   }
 
-  async function deleteProject(id: string) {
-    await supabase.from("projects").delete().eq("id", id);
-    loadProjects();
+  async function deleteProject(id: string) { await supabase.from("projects").delete().eq("id", id); loadProjects(); }
+
+  async function addChild(child: { fullName: string; dob: string; vacationPeriods: VacationPeriod[]; role?: ChildRole }) {
+    const { firstName, lastName } = splitFullName(child.fullName);
+    await supabase.from("children").insert({ project_id: activeProject!.id, first_name: firstName, last_name: lastName, dob: child.dob, vacation_periods: child.vacationPeriods || [], role: child.role || null });
+    await refreshActive();
   }
 
-  async function addChild(child: { firstName: string; lastName: string; dob: string; vacationPeriods: VacationPeriod[]; role?: ChildRole }) {
-    await supabase.from("children").insert({ project_id: activeProject!.id, first_name: child.firstName, last_name: child.lastName, dob: child.dob, vacation_periods: child.vacationPeriods || [], role: child.role || null });
-    refreshActive();
-  }
-
+  // Fix #1: import now stores correctly and refreshes
   async function addChildren(children: { firstName: string; lastName: string; dob: string; vacationPeriods: VacationPeriod[]; role?: ChildRole }[]) {
-    const rows = children.map(c => ({ project_id: activeProject!.id, first_name: c.firstName, last_name: c.lastName, dob: c.dob, vacation_periods: c.vacationPeriods || [], role: c.role || null }));
-    await supabase.from("children").insert(rows);
-    refreshActive();
+    if (children.length === 0) return;
+    const rows = children.map(c => ({
+      project_id: activeProject!.id,
+      first_name: c.firstName,
+      last_name:  c.lastName,
+      dob:        c.dob,
+      vacation_periods: c.vacationPeriods || [],
+      role: c.role || null,
+    }));
+    const { error } = await supabase.from("children").insert(rows);
+    if (error) { console.error("Import error:", error); return; }
+    await refreshActive();
   }
 
-  async function updateChild(id: string, data: { firstName: string; lastName: string; dob: string; vacationPeriods: VacationPeriod[]; role?: ChildRole }) {
-    await supabase.from("children").update({ first_name: data.firstName, last_name: data.lastName, dob: data.dob, vacation_periods: data.vacationPeriods || [], role: data.role || null }).eq("id", id);
-    refreshActive();
+  async function updateChild(id: string, data: { fullName: string; dob: string; vacationPeriods: VacationPeriod[]; role?: ChildRole }) {
+    const { firstName, lastName } = splitFullName(data.fullName);
+    await supabase.from("children").update({ first_name: firstName, last_name: lastName, dob: data.dob, vacation_periods: data.vacationPeriods || [], role: data.role || null }).eq("id", id);
+    await refreshActive();
   }
 
-  async function removeChild(id: string) {
-    await supabase.from("children").delete().eq("id", id); refreshActive();
-  }
-
-  async function addGroup(name: string) {
-    await supabase.from("groups").insert({ project_id: activeProject!.id, name, child_ids: [] }); refreshActive();
-  }
-
-  async function updateGroup(id: string, data: Partial<Group>) {
-    await supabase.from("groups").update(data).eq("id", id); refreshActive();
-  }
-
-  async function removeGroup(id: string) {
-    await supabase.from("groups").delete().eq("id", id); refreshActive();
-  }
+  async function removeChild(id: string) { await supabase.from("children").delete().eq("id", id); await refreshActive(); }
+  async function addGroup(name: string) { await supabase.from("groups").insert({ project_id: activeProject!.id, name, child_ids: [] }); await refreshActive(); }
+  async function updateGroup(id: string, data: Partial<Group>) { await supabase.from("groups").update(data).eq("id", id); await refreshActive(); }
+  async function removeGroup(id: string) { await supabase.from("groups").delete().eq("id", id); await refreshActive(); }
 
   async function updateRules(fn: (r: Rules) => Rules) {
     const r = fn(activeProject!.rules);
@@ -606,28 +635,40 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
   async function updateDaySessions(dateStr: string, sessions: Record<string, Session>) {
     const day = await getOrCreateDay(dateStr);
     await supabase.from("shooting_days").update({ sessions }).eq("id", day.id);
-    refreshActive();
+    await refreshActive();
+  }
+
+  async function setDayChildIds(dateStr: string, newIds: string[]) {
+    const day = await getOrCreateDay(dateStr);
+    await supabase.from("shooting_days").update({ child_ids: newIds }).eq("id", day.id);
+    await refreshActive();
   }
 
   async function toggleChildOnDay(dateStr: string, childId: string) {
     const day = await getOrCreateDay(dateStr);
     const ids = day.child_ids || [];
     const newIds = ids.includes(childId) ? ids.filter(i => i !== childId) : [...ids, childId];
-    // Fix #8: if empty, update with empty array so calendar shows correctly
     await supabase.from("shooting_days").update({ child_ids: newIds }).eq("id", day.id);
-    refreshActive();
+    await refreshActive();
   }
 
   async function addGroupToDay(dateStr: string, groupId: string) {
-    const group = activeProject!.groups.find(g => g.id === groupId);
-    if (!group) return;
+    const group = activeProject!.groups.find(g => g.id === groupId); if (!group) return;
     const day = await getOrCreateDay(dateStr);
     const ids = [...new Set([...(day.child_ids || []), ...group.child_ids])];
     await supabase.from("shooting_days").update({ child_ids: ids }).eq("id", day.id);
-    refreshActive();
+    await refreshActive();
   }
 
-  // Fix #1: Sequential session starts to avoid race conditions
+  // Fix #2: remove entire group from day
+  async function removeGroupFromDay(dateStr: string, groupId: string) {
+    const group = activeProject!.groups.find(g => g.id === groupId); if (!group) return;
+    const day = activeProject!.shootingDays[dateStr]; if (!day) return;
+    const ids = (day.child_ids || []).filter(id => !group.child_ids.includes(id));
+    await supabase.from("shooting_days").update({ child_ids: ids }).eq("id", day.id);
+    await refreshActive();
+  }
+
   async function startSessionsSequentially(dateStr: string, childIds: string[], timeISO?: string) {
     const day = await getOrCreateDay(dateStr);
     const sessions = { ...(day.sessions || {}) };
@@ -640,7 +681,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     }
     if (!changed) return;
     await supabase.from("shooting_days").update({ sessions }).eq("id", day.id);
-    refreshActive();
+    await refreshActive();
   }
 
   async function startSession(dateStr: string, childId: string, timeISO?: string) {
@@ -649,8 +690,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
 
   async function cancelSession(dateStr: string, childId: string) {
     const day = activeProject!.shootingDays[dateStr]; if (!day) return;
-    const sessions = { ...(day.sessions || {}) };
-    delete sessions[childId];
+    const sessions = { ...(day.sessions || {}) }; delete sessions[childId];
     await updateDaySessions(dateStr, sessions);
   }
 
@@ -670,10 +710,8 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
   async function cancelLastEvent(dateStr: string, childId: string) {
     const day = activeProject!.shootingDays[dateStr]; if (!day) return;
     const sessions = { ...(day.sessions || {}) };
-    const s = { ...sessions[childId] };
-    if (!s?.events?.length) return;
-    const events = [...s.events];
-    events.pop();
+    const s = { ...sessions[childId] }; if (!s?.events?.length) return;
+    const events = [...s.events]; events.pop();
     const lastEv = events[events.length - 1];
     let status: Session["status"] = "working";
     if (lastEv?.type === "pause_start") status = "paused";
@@ -703,8 +741,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
   async function editEventTime(dateStr: string, childId: string, eventIndex: number, newTimeISO: string) {
     const day = activeProject!.shootingDays[dateStr]; if (!day) return;
     const sessions = { ...(day.sessions || {}) };
-    const s = { ...sessions[childId] };
-    const events = [...(s.events || [])];
+    const s = { ...sessions[childId] }; const events = [...(s.events || [])];
     events[eventIndex] = { ...events[eventIndex], time: newTimeISO };
     s.events = events; sessions[childId] = s;
     await updateDaySessions(dateStr, sessions);
@@ -726,15 +763,13 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
 
   const Fonts = () => <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@700;800&display=swap" rel="stylesheet" />;
 
-  if (loading && view === "home") return (
-    <div className="min-h-screen bg-[#080d16] flex items-center justify-center">
-      <Fonts /><div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-    </div>
-  );
+  if (loading && view === "home") return <div className="min-h-screen bg-[#080d16] flex items-center justify-center"><Fonts /><div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" /></div>;
 
   if (view === "home") return <><Fonts /><HomeView projects={projects} userEmail={session.user.email} onCreate={createProject} onOpen={openProject} onDelete={deleteProject} onSignOut={onSignOut} /></>;
   if (view === "project" && activeProject) return <><Fonts /><ProjectView project={activeProject} onBack={() => { setView("home"); loadProjects(); }} onAddChild={addChild} onAddChildren={addChildren} onUpdateChild={updateChild} onRemoveChild={removeChild} onAddGroup={addGroup} onUpdateGroup={updateGroup} onRemoveGroup={removeGroup} onUpdateRules={updateRules} onOpenDay={date => { setActiveDate(date); setView("shooting"); }} /></>;
-  if (view === "shooting" && activeProject && activeDate) return <><Fonts /><ShootingView project={activeProject} dateStr={activeDate} onBack={() => { setView("project"); refreshActive(); }}
+  if (view === "shooting" && activeProject && activeDate) return <><Fonts /><ShootingView
+    project={activeProject} dateStr={activeDate}
+    onBack={() => { setView("project"); refreshActive(); }}
     onStartSessions={(cids, t) => startSessionsSequentially(activeDate, cids, t)}
     onStartSession={(cid, t) => startSession(activeDate, cid, t)}
     onCancelSession={cid => cancelSession(activeDate, cid)}
@@ -744,6 +779,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     onReopenSession={cid => reopenSession(activeDate, cid)}
     onToggleChild={cid => toggleChildOnDay(activeDate, cid)}
     onAddGroup={gid => addGroupToDay(activeDate, gid)}
+    onRemoveGroup={gid => removeGroupFromDay(activeDate, gid)}
     onEditEventTime={(cid, idx, t) => editEventTime(activeDate, cid, idx, t)}
     onEditStartTime={(cid, t) => editStartTime(activeDate, cid, t)}
     onEditEndTime={(cid, t) => editEndTime(activeDate, cid, t)}
@@ -810,7 +846,7 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
   onAddGroup: (name: string) => void; onUpdateGroup: (id: string, d: any) => void; onRemoveGroup: (id: string) => void;
   onUpdateRules: (fn: (r: Rules) => Rules) => void; onOpenDay: (date: string) => void;
 }) {
-  const [tab, setTab] = useState<"calendar" | "children" | "groups" | "settings">("calendar");
+  const [tab, setTab]           = useState<"calendar" | "children" | "groups" | "settings">("calendar");
   const [childModal, setChildModal] = useState<Child | "new" | null>(null);
   const [groupModal, setGroupModal] = useState<Group | "new" | null>(null);
   const tabs = [{ id: "calendar", label: "📅 Calendrier" }, { id: "children", label: "👦 Enfants" }, { id: "groups", label: "👥 Groupes" }, { id: "settings", label: "⚙️ Paramètres" }];
@@ -846,7 +882,7 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
   );
 }
 
-// ─── Calendar Tab — Fix #8 ────────────────────────────────────────────────────
+// ─── Calendar Tab — Fix #4 ────────────────────────────────────────────────────
 function CalendarTab({ project, onOpenDay }: { project: Project; onOpenDay: (d: string) => void }) {
   const [cur, setCur] = useState(() => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), 1); });
   const y = cur.getFullYear(), m = cur.getMonth();
@@ -855,6 +891,7 @@ function CalendarTab({ project, onOpenDay }: { project: Project; onOpenDay: (d: 
   const MN = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
   const DN = ["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"];
   function ds(d: number) { return `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`; }
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
@@ -868,14 +905,17 @@ function CalendarTab({ project, onOpenDay }: { project: Project; onOpenDay: (d: 
           if (!d) return <div key={i} />;
           const s = ds(d);
           const dayData = project.shootingDays[s];
-          // Fix #8: only show as shoot day if child_ids is non-empty
-          const count = dayData?.child_ids?.length || 0;
+          // Fix #4: count only children that still exist in the project
+          const validChildIds = (dayData?.child_ids || []).filter(id => project.children.find(c => c.id === id));
+          const count   = validChildIds.length;
           const isShoot = count > 0;
           const isToday = s === todayStr();
-          return <button key={i} onClick={() => onOpenDay(s)} className={`rounded-xl py-3 text-sm transition-all ${isShoot ? "bg-blue-900/50 border border-blue-600 text-blue-200 hover:bg-blue-800/60" : "bg-slate-900/40 border border-slate-800 text-slate-400 hover:border-slate-600 hover:text-white"} ${isToday ? "ring-2 ring-blue-400" : ""}`}>
-            <div className="font-bold">{d}</div>
-            {isShoot && <div className="text-[10px] text-blue-400 mt-0.5">{count} 👦</div>}
-          </button>;
+          return (
+            <button key={i} onClick={() => onOpenDay(s)} className={`rounded-xl py-3 text-sm transition-all ${isShoot ? "bg-blue-900/50 border border-blue-600 text-blue-200 hover:bg-blue-800/60" : "bg-slate-900/40 border border-slate-800 text-slate-400 hover:border-slate-600 hover:text-white"} ${isToday ? "ring-2 ring-blue-400" : ""}`}>
+              <div className="font-bold">{d}</div>
+              {isShoot && <div className="text-[10px] text-blue-400 mt-0.5">{count} 👦</div>}
+            </button>
+          );
         })}
       </div>
       <p className="text-[11px] text-slate-600 mt-4 text-center">Cliquez sur une date pour ouvrir la journée de tournage</p>
@@ -883,15 +923,17 @@ function CalendarTab({ project, onOpenDay }: { project: Project; onOpenDay: (d: 
   );
 }
 
-// ─── Children Tab ─────────────────────────────────────────────────────────────
+// ─── Children Tab — Fix #1 ────────────────────────────────────────────────────
 function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport }: { project: Project; onAdd: () => void; onEdit: (c: Child) => void; onRemove: (id: string) => void; onImport: (cs: any[]) => void }) {
   const fileRef = useRef<HTMLInputElement>(null);
-  const [importMsg, setImportMsg] = useState("");
+  const [importMsg, setImportMsg]       = useState("");
   const [importPreview, setImportPreview] = useState<any[]>([]);
-  const [showPreview, setShowPreview] = useState(false);
+  const [showPreview, setShowPreview]   = useState(false);
+  const [importing, setImporting]       = useState(false);
 
   function downloadTemplate() {
-    const csv = "Prénom;Nom;Date de naissance (JJ/MM/AAAA);Début vacances (JJ/MM/AAAA);Fin vacances (JJ/MM/AAAA)\nLéa;Martin;15/03/2015;01/07/2025;31/08/2025\n";
+    // Fix #1: single "Nom Prénom" column
+    const csv = "Nom Prénom;Date de naissance (JJ/MM/AAAA);Début vacances (JJ/MM/AAAA);Fin vacances (JJ/MM/AAAA)\nMartin Léa;15/03/2015;01/07/2025;31/08/2025\n";
     const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement("a"); a.href = url; a.download = "modele_enfants_kidstime.csv"; a.click();
@@ -900,13 +942,13 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport }: { project: 
 
   async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]; if (!file) return;
-    setImportMsg("Lecture du fichier…");
+    setImportMsg("Lecture du fichier…"); setShowPreview(false);
     try {
       let rows: any[] = [];
       if (file.name.endsWith(".csv") || file.name.endsWith(".txt")) {
-        const text = await file.text();
+        const text  = await file.text();
         const lines = text.split(/\r?\n/).filter(l => l.trim());
-        const sep = lines[0].includes(";") ? ";" : ",";
+        const sep   = lines[0].includes(";") ? ";" : ",";
         const headers = lines[0].split(sep).map(h => h.trim().replace(/^"|"$/g, ""));
         for (let i = 1; i < lines.length; i++) {
           const vals = lines[i].split(sep).map(v => v.trim().replace(/^"|"$/g, ""));
@@ -919,55 +961,42 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport }: { project: 
         const buf  = await file.arrayBuffer();
         const wb   = XLSX.read(buf, { type: "array" });
         const ws   = wb.Sheets[wb.SheetNames[0]];
-        rows = XLSX.utils.sheet_to_json(ws, { raw: true });
+        rows = XLSX.utils.sheet_to_json(ws, { raw: true, defval: "" });
       }
+
+      if (rows.length === 0) { setImportMsg("❌ Fichier vide."); return; }
 
       const headers = Object.keys(rows[0] || {});
 
-      // Fix #6: improved column detection — separate first/last name columns
-      const fnCol    = guessColumn(headers, ["prenom", "prénom", "firstname", "first name", "first"]);
-      const lnCol    = guessColumn(headers, ["nom", "lastname", "last name", "name", "last"]);
-      const fullCol  = guessColumn(headers, ["nom complet", "full name", "fullname", "nom et prenom", "nom & prenom"]);
-      const dobCol   = guessColumn(headers, ["naissance", "date de naissance", "dob", "birth", "birthdate", "date naissance"]);
-      const vs       = guessColumn(headers, ["debut vacances", "début vacances", "vacances debut", "start vacances", "debut vac", "vac debut"]);
-      const ve       = guessColumn(headers, ["fin vacances", "vacances fin", "end vacances", "fin vac", "vac fin"]);
+      // Fix #1: look for a single full-name column first, then separate columns
+      const fullCol = guessColumn(headers, ["nom prenom", "nom prénom", "nom et prenom", "nom & prenom", "full name", "fullname", "nom complet"]);
+      const fnCol   = guessColumn(headers, ["prenom", "prénom", "firstname", "first name", "first"]);
+      const lnCol   = guessColumn(headers, ["nom", "lastname", "last name", "last"]);
+      const dobCol  = guessColumn(headers, ["naissance", "date de naissance", "dob", "birth", "birthdate", "date naissance"]);
+      const vs      = guessColumn(headers, ["debut vacances", "début vacances", "vacances debut", "start vacances", "debut vac"]);
+      const ve      = guessColumn(headers, ["fin vacances", "vacances fin", "end vacances", "fin vac"]);
 
       const parsed = rows.map(r => {
-        let firstName = "";
-        let lastName  = "";
+        let firstName = "", lastName = "";
 
-        if (fnCol && lnCol) {
-          // Both columns found — use them directly
+        if (fullCol && r[fullCol]) {
+          // Single column — split first word = prénom, rest = nom
+          const { firstName: fn, lastName: ln } = splitFullName(String(r[fullCol]));
+          firstName = fn; lastName = ln;
+        } else if (fnCol && lnCol) {
           firstName = String(r[fnCol] || "").trim();
           lastName  = String(r[lnCol] || "").trim();
-        } else if (fullCol) {
-          // Full name column — split it
-          const parsed = parseFullName(String(r[fullCol] || ""));
-          firstName = parsed.firstName;
-          lastName  = parsed.lastName;
-        } else if (fnCol && !lnCol) {
-          // Only first name column found — check if it contains full name
+        } else if (fnCol) {
           const raw = String(r[fnCol] || "").trim();
-          if (raw.includes(" ")) {
-            const parsed = parseFullName(raw);
-            firstName = parsed.firstName;
-            lastName  = parsed.lastName;
-          } else {
-            firstName = raw;
-          }
-        } else if (!fnCol && lnCol) {
-          // Only last name column found
+          if (raw.includes(" ")) { const sp = splitFullName(raw); firstName = sp.firstName; lastName = sp.lastName; }
+          else firstName = raw;
+        } else if (lnCol) {
           const raw = String(r[lnCol] || "").trim();
-          if (raw.includes(" ")) {
-            const parsed = parseFullName(raw);
-            firstName = parsed.firstName;
-            lastName  = parsed.lastName;
-          } else {
-            lastName = raw;
-          }
+          if (raw.includes(" ")) { const sp = splitFullName(raw); firstName = sp.firstName; lastName = sp.lastName; }
+          else lastName = raw;
         } else {
-          // Fallback: try first two columns
-          const vals = Object.values(r);
+          // Fallback: use first two non-empty columns
+          const vals = Object.values(r).filter(v => v !== "");
           firstName = String(vals[0] || "").trim();
           lastName  = String(vals[1] || "").trim();
         }
@@ -980,19 +1009,22 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport }: { project: 
         };
       }).filter(c => c.firstName && c.dob);
 
-      if (parsed.length === 0) { setImportMsg("❌ Aucun enfant trouvé. Vérifiez le format du fichier."); return; }
+      if (parsed.length === 0) { setImportMsg("❌ Aucun enfant valide trouvé. Vérifiez que la colonne date de naissance est remplie."); return; }
       setImportPreview(parsed);
       setShowPreview(true);
-      setImportMsg(`✅ ${parsed.length} enfant(s) détecté(s)`);
-    } catch {
+      setImportMsg(`✅ ${parsed.length} enfant(s) détecté(s) — vérifiez l'aperçu ci-dessous`);
+    } catch (err) {
+      console.error(err);
       setImportMsg("❌ Erreur de lecture. Vérifiez le format du fichier.");
     }
     e.target.value = "";
   }
 
-  function confirmImport() {
-    onImport(importPreview);
-    setShowPreview(false); setImportPreview([]); setImportMsg("");
+  async function confirmImport() {
+    setImporting(true);
+    await onImport(importPreview);
+    setShowPreview(false); setImportPreview([]); setImportMsg(`✅ ${importPreview.length} enfant(s) importé(s) avec succès !`);
+    setImporting(false);
   }
 
   return (
@@ -1001,22 +1033,25 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport }: { project: 
         <h2 className="font-bold text-lg" style={{ fontFamily: "Syne, sans-serif" }}>Enfants ({project.children.length})</h2>
         <Btn onClick={onAdd}>+ Ajouter</Btn>
       </div>
+
+      {/* Import zone */}
       <div className="bg-slate-900/40 border border-slate-700 rounded-xl p-4 mb-6">
-        <div className="text-xs text-slate-400 uppercase tracking-wider mb-3">Import depuis un fichier Excel / CSV</div>
+        <div className="text-xs text-slate-400 uppercase tracking-wider mb-1">Import depuis un fichier Excel / CSV</div>
+        <div className="text-[10px] text-slate-500 mb-3">Colonne attendue : <span className="text-slate-300">Nom Prénom</span> (ou colonnes séparées Prénom / Nom) + <span className="text-slate-300">Date de naissance</span></div>
         <div className="flex flex-wrap gap-2 mb-3">
           <button onClick={downloadTemplate} className="text-xs text-blue-400 hover:text-blue-300 border border-blue-800/60 hover:border-blue-600 px-3 py-1.5 rounded-lg transition-colors">⬇ Télécharger le modèle CSV</button>
           <button onClick={() => fileRef.current?.click()} className="text-xs text-emerald-400 hover:text-emerald-300 border border-emerald-800/60 hover:border-emerald-600 px-3 py-1.5 rounded-lg transition-colors">📂 Importer un fichier (.xlsx / .csv)</button>
           <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv,.txt" className="hidden" onChange={handleFile} />
         </div>
-        {importMsg && <div className="text-xs text-slate-300 mb-2">{importMsg}</div>}
+        {importMsg && <div className={`text-xs mb-2 ${importMsg.startsWith("✅") ? "text-emerald-400" : "text-red-400"}`}>{importMsg}</div>}
         {showPreview && importPreview.length > 0 && (
           <div className="mt-3 bg-slate-800/60 rounded-xl p-3">
-            <div className="text-xs text-slate-400 mb-2">Aperçu — vérifiez avant d&apos;importer :</div>
-            <div className="space-y-1 max-h-40 overflow-y-auto">
+            <div className="text-xs text-slate-400 mb-2">Aperçu — <span className="text-white">prénom</span> · nom · date</div>
+            <div className="space-y-1 max-h-48 overflow-y-auto">
               {importPreview.map((c, i) => (
-                <div key={i} className="text-xs text-slate-200 flex gap-3">
-                  <span className="font-semibold">{c.firstName}</span>
-                  <span>{c.lastName}</span>
+                <div key={i} className="text-xs flex gap-3 items-center">
+                  <span className="text-white font-semibold">{c.firstName}</span>
+                  <span className="text-slate-300">{c.lastName}</span>
                   <span className="text-slate-500">{c.dob}</span>
                   {c.vacationPeriods.length > 0 && <span className="text-amber-400">🌴 {c.vacationPeriods[0].start} → {c.vacationPeriods[0].end}</span>}
                 </div>
@@ -1024,13 +1059,17 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport }: { project: 
             </div>
             <div className="flex gap-2 mt-3">
               <button onClick={() => { setShowPreview(false); setImportMsg(""); }} className="text-xs text-slate-400 hover:text-white">Annuler</button>
-              <button onClick={confirmImport} className="text-xs bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg">Confirmer l&apos;import ({importPreview.length})</button>
+              <button onClick={confirmImport} disabled={importing} className="text-xs bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-3 py-1.5 rounded-lg">
+                {importing ? "Import en cours…" : `Confirmer l'import (${importPreview.length})`}
+              </button>
             </div>
           </div>
         )}
       </div>
-      {project.children.length === 0 ? <div className="text-slate-500 text-center py-12 text-sm">Aucun enfant enregistré</div> :
-        <div className="space-y-3">{project.children.map(c => (
+
+      {project.children.length === 0
+        ? <div className="text-slate-500 text-center py-12 text-sm">Aucun enfant enregistré</div>
+        : <div className="space-y-3">{project.children.map(c => (
           <div key={c.id} className="flex items-center gap-4 bg-slate-900/50 border border-slate-700 rounded-xl px-5 py-4">
             <div className="w-10 h-10 rounded-full bg-blue-900/60 flex items-center justify-center text-blue-300 font-bold text-sm">{c.first_name?.[0]}{c.last_name?.[0]}</div>
             <div className="flex-1">
@@ -1051,13 +1090,12 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport }: { project: 
   );
 }
 
-// ─── Groups Tab — Fix #2, #3, #7 ─────────────────────────────────────────────
+// ─── Groups Tab ───────────────────────────────────────────────────────────────
 function GroupsTab({ project, onAdd, onRemove, onUpdateGroup }: { project: Project; onAdd: () => void; onRemove: (id: string) => void; onUpdateGroup: (id: string, d: any) => void }) {
-  const [editing, setEditing]     = useState<string | null>(null);
+  const [editing, setEditing]         = useState<string | null>(null);
   const [editingName, setEditingName] = useState<string | null>(null);
-  const [nameValue, setNameValue] = useState("");
+  const [nameValue, setNameValue]     = useState("");
 
-  // Fix #7: map childId → group names
   const childGroupMap: Record<string, string[]> = {};
   for (const g of project.groups) {
     for (const cid of g.child_ids || []) {
@@ -1074,27 +1112,21 @@ function GroupsTab({ project, onAdd, onRemove, onUpdateGroup }: { project: Proje
       </div>
       {project.groups.length === 0 ? <div className="text-slate-500 text-center py-12 text-sm">Aucun groupe</div> :
         <div className="space-y-4">{project.groups.map(g => {
-          // Fix #2: count members
           const memberCount = (g.child_ids || []).filter(id => project.children.find(c => c.id === id)).length;
           return (
             <div key={g.id} className="bg-slate-900/50 border border-slate-700 rounded-xl p-5">
               <div className="flex items-center justify-between mb-3">
-                {/* Fix #3: inline name editing */}
                 {editingName === g.id ? (
                   <div className="flex items-center gap-2 flex-1 mr-3">
-                    <input
-                      value={nameValue}
-                      onChange={e => setNameValue(e.target.value)}
+                    <input value={nameValue} onChange={e => setNameValue(e.target.value)}
                       className="flex-1 bg-slate-800 border border-blue-500 rounded-lg px-3 py-1.5 text-white text-sm focus:outline-none"
                       onKeyDown={e => { if (e.key === "Enter" && nameValue.trim()) { onUpdateGroup(g.id, { name: nameValue.trim() }); setEditingName(null); } if (e.key === "Escape") setEditingName(null); }}
-                      autoFocus
-                    />
+                      autoFocus />
                     <button onClick={() => { if (nameValue.trim()) { onUpdateGroup(g.id, { name: nameValue.trim() }); setEditingName(null); } }} className="text-emerald-400 hover:text-emerald-300 text-sm">✓</button>
                     <button onClick={() => setEditingName(null)} className="text-slate-400 hover:text-white text-sm">✕</button>
                   </div>
                 ) : (
                   <div className="flex items-center gap-2">
-                    {/* Fix #2: show member count */}
                     <h3 className="font-bold text-white">{g.name} <span className="text-slate-400 font-normal text-sm">({memberCount})</span></h3>
                     <button onClick={() => { setEditingName(g.id); setNameValue(g.name); }} className="text-slate-500 hover:text-slate-300 text-xs" title="Renommer">✏️</button>
                   </div>
@@ -1114,7 +1146,6 @@ function GroupsTab({ project, onAdd, onRemove, onUpdateGroup }: { project: Proje
                     : <div className="space-y-1">
                       {project.children.map(c => {
                         const isInThisGroup = (g.child_ids || []).includes(c.id);
-                        // Fix #7: show other groups this child belongs to
                         const otherGroups = (childGroupMap[c.id] || []).filter(gn => gn !== g.name);
                         return (
                           <label key={c.id} className="flex items-center gap-3 cursor-pointer hover:bg-slate-700/50 px-2 py-1.5 rounded-lg">
@@ -1123,11 +1154,8 @@ function GroupsTab({ project, onAdd, onRemove, onUpdateGroup }: { project: Proje
                             <span className="text-sm text-slate-200 flex-1">{c.first_name} {c.last_name}</span>
                             <div className="flex gap-1 flex-wrap">
                               <Badge color="blue">{getAgeBand(c.dob)} ans</Badge>
-                              {/* Fix #7: tag for other groups */}
                               {otherGroups.map(gn => (
-                                <span key={gn} className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-slate-600/60 text-slate-300 border border-slate-500">
-                                  👥 {gn}
-                                </span>
+                                <span key={gn} className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-slate-600/60 text-slate-300 border border-slate-500">👥 {gn}</span>
                               ))}
                             </div>
                           </label>
@@ -1139,7 +1167,7 @@ function GroupsTab({ project, onAdd, onRemove, onUpdateGroup }: { project: Proje
               )}
               <div className="flex flex-wrap gap-2">
                 {(g.child_ids || []).map((id: string) => { const c = project.children.find(ch => ch.id === id); return c ? <Badge key={id} color="slate">{c.first_name} {c.last_name}</Badge> : null; })}
-                {!g.child_ids?.length && <span className="text-xs text-slate-500">Aucun membre — cliquez sur &quot;Membres&quot;</span>}
+                {!g.child_ids?.length && <span className="text-xs text-slate-500">Aucun membre</span>}
               </div>
             </div>
           );
@@ -1153,12 +1181,9 @@ function GroupsTab({ project, onAdd, onRemove, onUpdateGroup }: { project: Proje
 function SettingsTab({ rules, onUpdateRules }: { rules: Rules; onUpdateRules: (fn: (r: Rules) => Rules) => void }) {
   function setRule(path: string, value: string) {
     onUpdateRules(r => {
-      const copy = JSON.parse(JSON.stringify(r));
-      const keys = path.split(".");
-      let obj: any = copy;
-      for (let i = 0; i < keys.length - 1; i++) obj = obj[keys[i]];
-      obj[keys[keys.length - 1]] = Number(value);
-      return copy;
+      const copy = JSON.parse(JSON.stringify(r)); const keys = path.split(".");
+      let obj: any = copy; for (let i = 0; i < keys.length - 1; i++) obj = obj[keys[i]];
+      obj[keys[keys.length - 1]] = Number(value); return copy;
     });
   }
   const BL: Record<AgeBand, string> = { "0-2": "Moins de 3 ans", "3-5": "3 à 5 ans", "6-11": "6 à 11 ans", "12-16": "12 à 16 ans" };
@@ -1207,34 +1232,33 @@ function SettingsTab({ rules, onUpdateRules }: { rules: Rules; onUpdateRules: (f
 }
 
 // ─── Modals ───────────────────────────────────────────────────────────────────
+// Fix #1: single fullName field
 function ChildFormModal({ child, onSave, onClose }: { child: Child | null; onSave: (d: any) => void; onClose: () => void }) {
   const [form, setForm] = useState({
-    firstName: child?.first_name || "",
-    lastName:  child?.last_name || "",
-    dob:       child?.dob || "",
+    fullName: child ? `${child.first_name} ${child.last_name}`.trim() : "",
+    dob:      child?.dob || "",
     vacationPeriods: child?.vacation_periods || [] as VacationPeriod[],
-    role: child?.role || "" as ChildRole | "",
+    role: (child?.role || "") as ChildRole | "",
   });
   const [newVac, setNewVac] = useState({ start: "", end: "" });
+
   return (
     <Modal title={child ? "Modifier l'enfant" : "Ajouter un enfant"} onClose={onClose}>
       <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-3">
-          <TextInput label="Prénom" value={form.firstName} onChange={e => setForm(f => ({ ...f, firstName: e.target.value }))} placeholder="Léa" />
-          <TextInput label="Nom" value={form.lastName} onChange={e => setForm(f => ({ ...f, lastName: e.target.value }))} placeholder="Martin" />
-        </div>
+        {/* Fix #1: single name field */}
+        <TextInput label="Prénom Nom" value={form.fullName} onChange={e => setForm(f => ({ ...f, fullName: e.target.value }))} placeholder="Ex: Léa Martin" />
         <TextInput label="Date de naissance" type="date" value={form.dob} onChange={e => setForm(f => ({ ...f, dob: e.target.value }))} />
         {form.dob && <div className="bg-blue-900/30 border border-blue-700/60 rounded-lg px-4 py-2 text-sm text-blue-300">{getAge(form.dob)} ans · Tranche DRIEETS : {getAgeBand(form.dob)} ans</div>}
 
-        {/* Fix #4: Role selector */}
+        {/* Role selector */}
         <div className="flex flex-col gap-1">
           <label className="text-[10px] text-slate-400 uppercase tracking-[0.15em] font-semibold">Statut</label>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             {(["", "role", "silhouette", "figurant"] as const).map(r => (
               <button key={r} type="button"
                 onClick={() => setForm(f => ({ ...f, role: r as ChildRole | "" }))}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${form.role === r
-                  ? r === "" ? "bg-slate-600 border-slate-500 text-white" : `${ROLE_COLORS[r as ChildRole]} border-opacity-100`
+                  ? r === "" ? "bg-slate-600 border-slate-500 text-white" : ROLE_COLORS[r as ChildRole]
                   : "bg-slate-800 border-slate-600 text-slate-400 hover:text-white"}`}>
                 {r === "" ? "Non défini" : ROLE_LABELS[r as ChildRole]}
               </button>
@@ -1252,11 +1276,11 @@ function ChildFormModal({ child, onSave, onClose }: { child: Child | null; onSav
           ))}
           <div className="flex gap-2 items-end mt-2">
             <TextInput label="Début" type="date" value={newVac.start} onChange={e => setNewVac(v => ({ ...v, start: e.target.value }))} />
-            <TextInput label="Fin" type="date" value={newVac.end} onChange={e => setNewVac(v => ({ ...v, end: e.target.value }))} />
+            <TextInput label="Fin"   type="date" value={newVac.end}   onChange={e => setNewVac(v => ({ ...v, end: e.target.value }))} />
             <button onClick={() => { if (newVac.start && newVac.end) { setForm(f => ({ ...f, vacationPeriods: [...f.vacationPeriods, newVac] })); setNewVac({ start: "", end: "" }); } }} className="bg-slate-700 hover:bg-slate-600 text-white px-3 rounded-lg h-9 text-sm">+</button>
           </div>
         </div>
-        <Btn className="w-full justify-center" onClick={() => { if (!form.firstName || !form.lastName || !form.dob) return; onSave({ ...form, role: form.role || undefined }); }}>
+        <Btn className="w-full justify-center" onClick={() => { if (!form.fullName.trim() || !form.dob) return; onSave({ ...form, role: form.role || undefined }); }}>
           {child ? "Enregistrer" : "Ajouter l'enfant"}
         </Btn>
       </div>
@@ -1277,9 +1301,9 @@ function GroupFormModal({ group, onSave, onClose }: { group: Group | null; onSav
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// SHOOTING VIEW — Fix #1, #5
+// SHOOTING VIEW — Fix #2, #3
 // ═════════════════════════════════════════════════════════════════════════════
-function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSession, onCancelSession, onApplyEvent, onCancelLastEvent, onEndSessions, onReopenSession, onToggleChild, onAddGroup, onEditEventTime, onEditStartTime, onEditEndTime, onExportXLSX, onExportPDF }: {
+function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSession, onCancelSession, onApplyEvent, onCancelLastEvent, onEndSessions, onReopenSession, onToggleChild, onAddGroup, onRemoveGroup, onEditEventTime, onEditStartTime, onEditEndTime, onExportXLSX, onExportPDF }: {
   project: Project; dateStr: string; onBack: () => void;
   onStartSessions: (cids: string[], t?: string) => void;
   onStartSession: (cid: string, t?: string) => void;
@@ -1290,18 +1314,20 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
   onReopenSession: (cid: string) => void;
   onToggleChild: (cid: string) => void;
   onAddGroup: (gid: string) => void;
+  onRemoveGroup: (gid: string) => void;
   onEditEventTime: (cid: string, idx: number, t: string) => void;
   onEditStartTime: (cid: string, t: string) => void;
   onEditEndTime: (cid: string, t: string) => void;
   onExportXLSX: () => void;
   onExportPDF: () => void;
 }) {
-  const [, setTick]           = useState(0);
+  const [, setTick]             = useState(0);
   const [addingChildren, setAdding] = useState(false);
   const [selected, setSelected]     = useState<Set<string>>(new Set());
   const [actionModal, setActionModal] = useState<{ type: "start" | "pause" | "resume" | "end" } | null>(null);
-  // Fix #5: search bar
-  const [search, setSearch] = useState("");
+  const [search, setSearch]         = useState("");
+  // Fix #3: role tab
+  const [roleTab, setRoleTab]       = useState<ChildRole | "all">("all");
 
   useEffect(() => { const t = setInterval(() => setTick(n => n + 1), 15000); return () => clearInterval(t); }, []);
 
@@ -1311,16 +1337,21 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
   const rules    = project.rules;
   const dateLabel = new Date(dateStr + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
 
-  // Fix #5: filter children by search
-  const filteredIds = search.trim()
-    ? childIds.filter(id => {
-        const c = project.children.find(ch => ch.id === id);
-        if (!c) return false;
-        const q = normalize(search);
-        return normalize(`${c.first_name} ${c.last_name}`).includes(q) ||
-               normalize(`${c.last_name} ${c.first_name}`).includes(q);
-      })
-    : childIds;
+  // Fix #3: compute which role tabs have children
+  const childrenInDay = childIds.map(id => project.children.find(c => c.id === id)).filter(Boolean) as Child[];
+  const rolesPresent  = ALL_ROLES.filter(r => childrenInDay.some(c => c.role === r));
+  const hasNoRole     = childrenInDay.some(c => !c.role);
+
+  // Filter by search + role tab
+  const filteredIds = childIds.filter(id => {
+    const c = project.children.find(ch => ch.id === id); if (!c) return false;
+    if (search.trim()) {
+      const q = normalize(search);
+      if (!normalize(`${c.first_name} ${c.last_name}`).includes(q) && !normalize(`${c.last_name} ${c.first_name}`).includes(q)) return false;
+    }
+    if (roleTab === "all") return true;
+    return c.role === roleTab;
+  });
 
   function toggleSelect(id: string) { setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }); }
   const selList   = [...selected];
@@ -1331,6 +1362,7 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
 
   return (
     <div className="min-h-screen bg-[#080d16] text-white" style={{ fontFamily: "'DM Mono', monospace" }}>
+      {/* Header */}
       <div className="border-b border-slate-800 px-6 py-4 flex items-center gap-4">
         <button onClick={onBack} className="text-slate-400 hover:text-white text-sm">← {project.name}</button>
         <div className="flex-1">
@@ -1344,7 +1376,7 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
       </div>
 
       <div className="max-w-4xl mx-auto px-6 py-6">
-        {/* Manage children */}
+        {/* Manage children — Fix #2: add/remove group buttons */}
         <div className="mb-5">
           <button onClick={() => setAdding(v => !v)} className="text-sm text-blue-400 hover:text-blue-300 border border-blue-800/60 hover:border-blue-600 px-4 py-2 rounded-lg transition-colors">
             {addingChildren ? "✕ Fermer" : "+ Gérer les enfants de la journée"}
@@ -1353,9 +1385,27 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
             <div className="mt-3 bg-slate-900/60 border border-slate-700 rounded-xl p-5">
               {project.groups.length > 0 && (
                 <div className="mb-4">
-                  <div className="text-[10px] text-slate-400 uppercase tracking-wider mb-2">Ajouter un groupe entier</div>
-                  <div className="flex flex-wrap gap-2">
-                    {project.groups.map(g => <button key={g.id} onClick={() => onAddGroup(g.id)} className="bg-slate-800 hover:bg-blue-900/50 border border-slate-600 hover:border-blue-600 text-sm px-3 py-1.5 rounded-lg transition-colors">👥 {g.name} ({g.child_ids?.length || 0})</button>)}
+                  <div className="text-[10px] text-slate-400 uppercase tracking-wider mb-2">Groupes — ajouter ou retirer en entier</div>
+                  <div className="space-y-2">
+                    {project.groups.map(g => {
+                      const groupInDay = g.child_ids.length > 0 && g.child_ids.every(id => childIds.includes(id));
+                      const groupPartial = !groupInDay && g.child_ids.some(id => childIds.includes(id));
+                      return (
+                        <div key={g.id} className="flex items-center gap-2">
+                          {/* Fix #2: add/remove group */}
+                          <button onClick={() => onAddGroup(g.id)}
+                            className={`text-sm px-3 py-1.5 rounded-lg border transition-colors ${groupInDay ? "bg-blue-900/50 border-blue-600 text-blue-300" : "bg-slate-800 border-slate-600 text-slate-300 hover:border-blue-600 hover:text-blue-300"}`}>
+                            + {g.name} ({g.child_ids?.length || 0})
+                            {groupPartial && <span className="text-amber-400 text-xs ml-1">partiel</span>}
+                          </button>
+                          {(groupInDay || groupPartial) && (
+                            <button onClick={() => onRemoveGroup(g.id)} className="text-xs text-red-400 hover:text-red-300 border border-red-800/60 hover:border-red-600 px-2 py-1.5 rounded-lg transition-colors">
+                              − Retirer
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -1372,16 +1422,27 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
           )}
         </div>
 
-        {/* Fix #5: Search bar */}
+        {/* Search */}
         {childIds.length > 0 && (
           <div className="mb-4">
-            <input
-              type="text"
-              placeholder="🔍 Rechercher un enfant…"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="w-full bg-slate-800/60 border border-slate-700 rounded-xl px-4 py-2.5 text-white text-sm focus:outline-none focus:border-blue-500 placeholder:text-slate-500 transition-colors"
-            />
+            <input type="text" placeholder="🔍 Rechercher un enfant…" value={search} onChange={e => setSearch(e.target.value)}
+              className="w-full bg-slate-800/60 border border-slate-700 rounded-xl px-4 py-2.5 text-white text-sm focus:outline-none focus:border-blue-500 placeholder:text-slate-500 transition-colors" />
+          </div>
+        )}
+
+        {/* Fix #3: Role tabs — only show if multiple roles present */}
+        {childIds.length > 0 && (rolesPresent.length > 0 || hasNoRole) && (
+          <div className="flex gap-1 mb-5 border-b border-slate-800 pb-0">
+            <button onClick={() => setRoleTab("all")}
+              className={`px-4 py-2 text-sm rounded-t-lg transition-colors border-b-2 ${roleTab === "all" ? "border-blue-500 text-white" : "border-transparent text-slate-500 hover:text-slate-300"}`}>
+              Tous ({childrenInDay.length})
+            </button>
+            {rolesPresent.map(r => (
+              <button key={r} onClick={() => setRoleTab(r)}
+                className={`px-4 py-2 text-sm rounded-t-lg transition-colors border-b-2 ${roleTab === r ? "border-blue-500 text-white" : "border-transparent text-slate-500 hover:text-slate-300"}`}>
+                {ROLE_LABELS[r]} ({childrenInDay.filter(c => c.role === r).length})
+              </button>
+            ))}
           </div>
         )}
 
@@ -1390,6 +1451,7 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
           <div className="bg-slate-900/60 border border-slate-700 rounded-xl px-5 py-3 mb-5 flex flex-wrap items-center gap-3">
             <span className="text-xs text-slate-400 font-semibold">Sélection :</span>
             <button onClick={() => setSelected(new Set(childIds))} className="text-xs text-blue-400 hover:text-blue-300">Tous</button>
+            <button onClick={() => setSelected(new Set(filteredIds))} className="text-xs text-slate-400 hover:text-white">Vue actuelle</button>
             <button onClick={() => setSelected(new Set())} className="text-xs text-slate-500 hover:text-white">Aucun</button>
             {project.groups.map(g => (
               <button key={g.id} onClick={() => setSelected(s => { const n = new Set(s); (g.child_ids || []).forEach(id => n.add(id)); return n; })} className="text-xs text-slate-400 hover:text-white border border-slate-700 hover:border-slate-500 px-2 py-0.5 rounded">
@@ -1398,7 +1460,6 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
             ))}
             <div className="flex-1" />
             {selected.size > 0 && <>
-              {/* Fix #1: use onStartSessions for multi-start */}
               {canStart  && <Btn variant="secondary" className="text-xs py-1.5 !bg-emerald-900/50 !text-emerald-300 border border-emerald-800" onClick={() => setActionModal({ type: "start" })}>▶ Démarrer</Btn>}
               {canPause  && <Btn variant="secondary" className="text-xs py-1.5 !bg-amber-900/50 !text-amber-300 border border-amber-800" onClick={() => setActionModal({ type: "pause" })}>⏸ Pause</Btn>}
               {canResume && <Btn variant="secondary" className="text-xs py-1.5 !bg-emerald-900/50 !text-emerald-300 border border-emerald-800" onClick={() => setActionModal({ type: "resume" })}>▶ Reprendre</Btn>}
@@ -1410,18 +1471,19 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
         {childIds.length === 0
           ? <div className="text-slate-500 text-center py-16 text-sm">Ajoutez des enfants à cette journée</div>
           : filteredIds.length === 0
-            ? <div className="text-slate-500 text-center py-8 text-sm">Aucun résultat pour &quot;{search}&quot;</div>
+            ? <div className="text-slate-500 text-center py-8 text-sm">Aucun résultat{search ? ` pour "${search}"` : ""}</div>
             : <div className="space-y-4">
               {filteredIds.map(id => {
                 const child = project.children.find(c => c.id === id); if (!child) return null;
-                const session  = sessions[id];
-                const vacation = isVacation(child, dateStr);
-                const band     = getAgeBand(child.dob);
+                const session    = sessions[id];
+                const vacation   = isVacation(child, dateStr);
+                const band       = getAgeBand(child.dob);
                 const period: Period = vacation ? "vacation" : "school";
-                const maxWork  = rules.maxWorkMinutes[band][period];
+                const maxWork    = rules.maxWorkMinutes[band][period];
                 const breakAfter = rules.mandatoryBreakAfterMinutes[band][period];
-                const stats    = computeSessionStats(session, rules);
-                return <ChildCard key={id} child={child} session={session} stats={stats} maxWork={maxWork} breakAfter={breakAfter} maxAmplitude={rules.maxAmplitudeMinutes} vacation={vacation} isSelected={selected.has(id)} onSelect={() => toggleSelect(id)}
+                const stats      = computeSessionStats(session, rules);
+                return <ChildCard key={id} child={child} session={session} stats={stats} maxWork={maxWork} breakAfter={breakAfter} maxAmplitude={rules.maxAmplitudeMinutes} vacation={vacation}
+                  isSelected={selected.has(id)} onSelect={() => toggleSelect(id)}
                   onStart={t => onStartSession(id, t)}
                   onCancelSession={() => onCancelSession(id)}
                   onCancelLastEvent={() => onCancelLastEvent(id)}
@@ -1438,8 +1500,7 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
       {actionModal && <TimeActionModal type={actionModal.type} childCount={selected.size} dateStr={dateStr}
         onConfirm={timeISO => {
           const ids = [...selected];
-          // Fix #1: use batch start for multi-child
-          if (actionModal.type === "start")       onStartSessions(ids, timeISO);
+          if      (actionModal.type === "start")  onStartSessions(ids, timeISO);
           else if (actionModal.type === "pause")  onApplyEvent(ids, "pause_start", timeISO);
           else if (actionModal.type === "resume") onApplyEvent(ids, "pause_end", timeISO);
           else if (actionModal.type === "end")    onEndSessions(ids, timeISO);
@@ -1481,20 +1542,15 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
   child: Child; session: Session | undefined; stats: SessionStats | null;
   maxWork: number; breakAfter: number; maxAmplitude: number; vacation: boolean;
   isSelected: boolean; onSelect: () => void;
-  onStart: (t?: string) => void;
-  onCancelSession: () => void;
-  onCancelLastEvent: () => void;
-  onReopenSession: () => void;
-  onEditEventTime: (idx: number, t: string) => void;
-  onEditStartTime: (t: string) => void;
-  onEditEndTime: (t: string) => void;
+  onStart: (t?: string) => void; onCancelSession: () => void; onCancelLastEvent: () => void; onReopenSession: () => void;
+  onEditEventTime: (idx: number, t: string) => void; onEditStartTime: (t: string) => void; onEditEndTime: (t: string) => void;
   dateStr: string;
 }) {
   const [editingIdx, setEditingIdx] = useState<number | "start" | "end" | null>(null);
   const [editTime, setEditTime]     = useState("");
-  const band = getAgeBand(child.dob);
-  const workPct = stats ? Math.min(100, (stats.workMin / maxWork) * 100) : 0;
-  const ampPct  = stats ? Math.min(100, (stats.amplitudeMin / maxAmplitude) * 100) : 0;
+  const band     = getAgeBand(child.dob);
+  const workPct  = stats ? Math.min(100, (stats.workMin / maxWork) * 100) : 0;
+  const ampPct   = stats ? Math.min(100, (stats.amplitudeMin / maxAmplitude) * 100) : 0;
   const workCrit = stats && stats.workMin >= maxWork, workWarn = stats && stats.workMin >= maxWork * 0.8;
   const ampCrit  = stats && stats.amplitudeMin >= maxAmplitude, ampWarn = stats && stats.amplitudeMin >= maxAmplitude * 0.85;
   const breakDue = stats?.timeSinceBreak != null && stats.timeSinceBreak >= breakAfter;
@@ -1507,7 +1563,6 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
     else onEditEventTime(editingIdx as number, iso);
     setEditingIdx(null);
   }
-
   const events = session?.events || [];
 
   return (
@@ -1549,7 +1604,6 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
               </div>
             ))}
           </div>
-
           <div className="space-y-1.5 mb-4">
             {([{ l: "Travail", p: workPct, crit: workCrit, warn: workWarn }, { l: "Amplitude", p: ampPct, crit: ampCrit, warn: ampWarn }] as any[]).map(({ l, p, crit, warn }) => (
               <div key={l}>
@@ -1558,11 +1612,9 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
               </div>
             ))}
           </div>
-
           {breakDue && !workCrit && <div className="bg-amber-900/30 border border-amber-700 rounded-lg px-3 py-2 text-xs text-amber-300 mb-3">⚠️ Pause obligatoire — {formatMinutes(stats.timeSinceBreak)} consécutifs (seuil : {formatMinutes(breakAfter)})</div>}
           {workCrit && <div className="bg-red-900/30 border border-red-700 rounded-lg px-3 py-2 text-xs text-red-300 mb-3">🚫 Temps de travail maximum atteint</div>}
           {ampCrit  && <div className="bg-red-900/30 border border-red-700 rounded-lg px-3 py-2 text-xs text-red-300 mb-3">🚫 Amplitude maximale atteinte</div>}
-
           <div className="bg-slate-800/40 border border-slate-700/50 rounded-xl p-3 mb-3">
             <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-2">Chronologie — cliquez une heure pour modifier</div>
             <div className="space-y-1.5">
@@ -1575,7 +1627,6 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
               )}
             </div>
           </div>
-
           <div className="flex flex-wrap gap-2">
             {session?.status !== "done" && events.length > 0 && (
               <button onClick={onCancelLastEvent} className="text-xs text-amber-400 hover:text-amber-300 border border-amber-800/60 hover:border-amber-600 px-3 py-1.5 rounded-lg transition-colors">↩ Annuler dernière action</button>
@@ -1589,7 +1640,6 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
           </div>
         </>
       )}
-
       {!session?.start_time && <SingleStartButton onStart={onStart} dateStr={dateStr} />}
       {session?.status === "done" && <div className="text-center text-emerald-400 text-sm font-semibold mt-3">✓ Journée terminée</div>}
     </div>
@@ -1604,7 +1654,7 @@ function TimelineRow({ label, iso, isEditing, editTime, onEdit, onTimeChange, on
         <>
           <input type="time" value={editTime} onChange={e => onTimeChange(e.target.value)} className="bg-slate-700 border border-blue-500 rounded px-2 py-0.5 text-white text-xs w-24" />
           <button onClick={onConfirm} className="text-emerald-400 hover:text-emerald-300">✓</button>
-          <button onClick={onCancel} className="text-slate-500 hover:text-white">✕</button>
+          <button onClick={onCancel}  className="text-slate-500 hover:text-white">✕</button>
         </>
       ) : (
         <button onClick={onEdit} className="text-blue-300 hover:text-blue-200 hover:underline underline-offset-2">{formatTime(iso)}</button>
@@ -1630,3 +1680,4 @@ function SingleStartButton({ onStart, dateStr }: { onStart: (t?: string) => void
     </div>
   );
 }
+
