@@ -421,7 +421,9 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     ]);
     const shootingDays: Record<string, ShootingDay> = {};
     (days || []).forEach((d: ShootingDay) => { shootingDays[d.date] = d; });
-    return { ...proj, children: children || [], groups: groups || [], shootingDays };
+    // Map child_role (DB column) → role (app field)
+    const mappedChildren = (children || []).map((c: any) => ({ ...c, role: c.child_role ?? undefined }));
+    return { ...proj, children: mappedChildren, groups: groups || [], shootingDays };
   }
 
   async function openProject(id: string) { setLoading(true); const f = await loadFullProject(id); setActiveProject(f); setView("project"); setLoading(false); }
@@ -447,7 +449,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
       last_name: lastName,
       dob: child.dob,
       vacation_periods: child.vacationPeriods || [],
-      role: child.role,  // null or a valid ChildRole — never undefined
+      child_role: child.role ?? null,
     });
     if (error) { console.error("addChild error:", error); return; }
     await refreshActive();
@@ -463,7 +465,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
       last_name: c.lastName,
       dob: c.dob,
       vacation_periods: c.vacationPeriods || [],
-      role: c.role ?? null,  // null if undefined
+     child_role: c.role ?? null,
     }));
     const { error } = await supabase.from("children").insert(rows);
     if (error) { console.error("Import error:", error); throw error; }
@@ -478,7 +480,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
       last_name: lastName,
       dob: data.dob,
       vacation_periods: data.vacationPeriods || [],
-      role: data.role,  // null or valid ChildRole
+     child_role: data.role ?? null,
     }).eq("id", id);
     if (error) { console.error("updateChild error:", error); return; }
     await refreshActive();
