@@ -528,12 +528,12 @@ function exportProjectGlobalPDF(project: Project) {
     const childDates = sortedDates.filter(d => dd[d].inDay);
     if (childDates.length === 0) continue;
 
-    let totWork = 0, totValidBreak = 0, totOtherBreak = 0, totAmp = 0, totWorkOver = 0, totAmpOver = 0;
+    let totWork = 0, totDejeuner = 0, totValidPause = 0, totAmp = 0, totWorkOver = 0, totAmpOver = 0;
     for (const d of childDates) {
       const { stats, maxWork, maxAmp } = dd[d];
       if (stats) {
-        totWork += stats.workMin; totValidBreak += stats.validBreakMin;
-        totOtherBreak += Math.max(0, stats.breakMin - stats.validBreakMin);
+        totWork += stats.workMin; totDejeuner += stats.dejeunerMin;
+        totValidPause += stats.validBreakMin;
         totAmp += stats.amplitudeMin;
         totWorkOver += Math.max(0, stats.workMin - maxWork);
         totAmpOver  += Math.max(0, stats.amplitudeMin - maxAmp);
@@ -571,11 +571,11 @@ function exportProjectGlobalPDF(project: Project) {
       </thead>
       <tbody>
         <tr><td ${TDL}>Heure de convocation</td><td ${TDT()}></td>${cells(d => d.session?.start_time ? formatTime(d.session.start_time) : "")}</tr>
-        <tr><td ${TDL}>Durée de pause déjeuner</td><td ${TDT()}>${fmtHHMM(totValidBreak)}</td>${cells(d => fmtHHMM(d.stats?.validBreakMin ?? 0))}</tr>
-        <tr><td ${TDL}>Durée totale des autres pauses</td><td ${TDT()}>${fmtHHMM(totOtherBreak)}</td>${cells(d => fmtHHMM(Math.max(0, (d.stats?.breakMin ?? 0) - (d.stats?.validBreakMin ?? 0))))}</tr>
+        <tr><td ${TDL}>Durée de pause déjeuner</td><td ${TDT()}></td>${cells(d => fmtHHMM(d.stats?.dejeunerMin ?? 0))}</tr>
+        <tr><td ${TDL}>Durée des autres pauses</td><td ${TDT()}></td>${cells(d => fmtHHMM(d.stats?.validBreakMin ?? 0))}</tr>
         <tr>
           <td ${TDL} style="text-align:left;padding:3px 6px;border:1px solid #ccc;font-size:8px;background:#f4f6fb;font-weight:bold;white-space:nowrap">Durée totale de travail (plateau, HMC, attente)</td>
-          <td ${TDT()}>${fmtHHMM(totWork)}</td>
+          <td ${TDT()}></td>
           ${cells(d => `<b>${fmtHHMM(d.stats?.workMin ?? 0)}</b>`)}
         </tr>
         <tr><td ${TDL}>Heure de fin de journée</td><td ${TDT()}></td>${cells(d => d.session?.end_time ? formatTime(d.session.end_time) : "")}</tr>
@@ -587,7 +587,7 @@ function exportProjectGlobalPDF(project: Project) {
         </tr>
         <tr>
           <td ${TDL} style="text-align:left;padding:3px 6px;border:1px solid #ccc;font-size:8px;background:#f4f6fb;font-weight:bold;white-space:nowrap">Amplitude de présence</td>
-          <td ${TDT()}>${fmtHHMM(totAmp)}</td>
+          <td ${TDT()}></td>
           ${cells(d => `<b>${fmtHHMM(d.stats?.amplitudeMin ?? 0)}</b>`)}
         </tr>
         <tr><td ${TDL}>Amplitude autorisée</td><td ${TDT()}></td>${cells(d => fmtHHMM(d.maxAmp))}</tr>
