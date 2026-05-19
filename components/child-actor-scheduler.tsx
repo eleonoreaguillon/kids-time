@@ -1589,8 +1589,8 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
   const [editTime, setEditTime] = useState("");
   const workPct  = stats ? Math.min(100, (stats.workMin / maxWork) * 100) : 0;
   const ampPct   = stats ? Math.min(100, (stats.amplitudeMin / maxAmplitude) * 100) : 0;
-  const workCrit = stats && stats.workMin >= maxWork;
-  const ampCrit  = stats && stats.amplitudeMin >= maxAmplitude;
+  const workCrit = stats && stats.workMin > maxWork;
+  const ampCrit  = stats && stats.amplitudeMin > maxAmplitude;
   const breakDue = stats?.timeSinceBreak != null && stats.timeSinceBreak >= breakAfter;
 
   // Alerte 20h (ou heure de dérogation si définie pour cette date)
@@ -1662,8 +1662,8 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
               </div>
 
               {breakDue && !workCrit && <div className="bg-amber-900/30 border border-amber-700 rounded-lg px-3 py-2 text-xs text-amber-300">⚠️ Pause obligatoire — {formatMinutes(stats.timeSinceBreak)} consécutifs</div>}
-              {workCrit && <div className="bg-red-900/30 border border-red-700 rounded-lg px-3 py-2 text-xs text-red-300">🚫 Temps de travail maximum atteint</div>}
-              {ampCrit && <div className="bg-red-900/30 border border-red-700 rounded-lg px-3 py-2 text-xs text-red-300">🚫 Amplitude maximale atteinte</div>}
+              {workCrit && <div className="bg-red-900/30 border border-red-700 rounded-lg px-3 py-2 text-xs text-red-300">🚫 Temps de travail maximum dépassé</div>}
+              {ampCrit && <div className="bg-red-900/30 border border-red-700 rounded-lg px-3 py-2 text-xs text-red-300">🚫 Amplitude maximale dépassée</div>}
               {pastTimeLimit && <div className="bg-orange-900/30 border border-orange-600 rounded-lg px-3 py-2 text-xs text-orange-300">🕗 Limite horaire {limitTimeStr} dépassée{derogation ? " (dérogation)" : ""}</div>}
 
               <div className="bg-slate-800/40 border border-slate-700/50 rounded-lg p-3">
