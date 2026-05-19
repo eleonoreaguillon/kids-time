@@ -480,21 +480,10 @@ function exportProjectGlobalPDF(project: Project) {
   const DAY_LETTERS = ["D","L","M","M","J","V","S"];
   const MONTH_NAMES = ["JANVIER","FÉVRIER","MARS","AVRIL","MAI","JUIN","JUILLET","AOÛT","SEPTEMBRE","OCTOBRE","NOVEMBRE","DÉCEMBRE"];
 
-  const monthSpans: { month: string; count: number }[] = [];
-  for (const d of sortedDates) {
-    const month = MONTH_NAMES[new Date(d + "T12:00:00").getMonth()];
-    if (!monthSpans.length || monthSpans[monthSpans.length - 1].month !== month) monthSpans.push({ month, count: 1 });
-    else monthSpans[monthSpans.length - 1].count++;
-  }
-
   const TH  = (bg: string) => `style="background:${bg};color:white;border:1px solid #bbb;text-align:center;font-size:7px;padding:3px 2px"`;
   const TDL = `style="text-align:left;padding:3px 6px;border:1px solid #ccc;font-size:8px;background:#f4f6fb;white-space:nowrap"`;
   const TDV = (extra="") => `style="text-align:center;padding:2px 3px;border:1px solid #ccc;font-size:8px;${extra}"`;
   const TDT = (extra="") => `style="text-align:center;padding:2px 4px;border:1px solid #ccc;font-weight:bold;font-size:8px;background:#e8eef8;${extra}"`;
-
-  const headerMonths = monthSpans.map(s => `<th colspan="${s.count}" ${TH("#1e3a5f")}>${s.month}</th>`).join("");
-  const headerJours  = sortedDates.map(d => `<th ${TH("#2d4a6f")}>${DAY_LETTERS[new Date(d+"T12:00:00").getDay()]}</th>`).join("");
-  const headerDates  = sortedDates.map(d => `<th ${TH("#3d5a7f")}>${new Date(d+"T12:00:00").getDate()}</th>`).join("");
 
   let html = `<html><head><meta charset="utf-8">
   <style>
@@ -531,6 +520,17 @@ function exportProjectGlobalPDF(project: Project) {
     const childDates = sortedDates.filter(d => dd[d].inDay);
     if (childDates.length === 0) continue;
 
+    // En-têtes calculés uniquement sur les dates de cet enfant
+    const childMonthSpans: { month: string; count: number }[] = [];
+    for (const d of childDates) {
+      const month = MONTH_NAMES[new Date(d + "T12:00:00").getMonth()];
+      if (!childMonthSpans.length || childMonthSpans[childMonthSpans.length - 1].month !== month) childMonthSpans.push({ month, count: 1 });
+      else childMonthSpans[childMonthSpans.length - 1].count++;
+    }
+    const headerMonths = childMonthSpans.map(s => `<th colspan="${s.count}" ${TH("#1e3a5f")}>${s.month}</th>`).join("");
+    const headerJours  = childDates.map(d => `<th ${TH("#2d4a6f")}>${DAY_LETTERS[new Date(d+"T12:00:00").getDay()]}</th>`).join("");
+    const headerDates  = childDates.map(d => `<th ${TH("#3d5a7f")}>${new Date(d+"T12:00:00").getDate()}</th>`).join("");
+
     let totWork = 0, totDejeuner = 0, totValidPause = 0, totAmp = 0, totWorkOver = 0, totAmpOver = 0;
     for (const d of childDates) {
       const { stats, maxWork, maxAmp } = dd[d];
@@ -544,15 +544,13 @@ function exportProjectGlobalPDF(project: Project) {
     }
 
     const cells = (fn: (d: DayData) => string) =>
-      sortedDates.map(ds => {
+      childDates.map(ds => {
         const d = dd[ds];
-        if (!d.inDay) return `<td ${TDV(d.vacation ? "background:#fffbeb" : "")}></td>`;
         return `<td ${TDV(d.vacation ? "background:#fffbeb" : "")}>${fn(d)}</td>`;
       }).join("");
     const cellsWithDate = (fn: (d: DayData, ds: string) => string) =>
-      sortedDates.map(ds => {
+      childDates.map(ds => {
         const d = dd[ds];
-        if (!d.inDay) return `<td ${TDV(d.vacation ? "background:#fffbeb" : "")}></td>`;
         return `<td ${TDV(d.vacation ? "background:#fffbeb" : "")}>${fn(d, ds)}</td>`;
       }).join("");
 
@@ -575,7 +573,7 @@ function exportProjectGlobalPDF(project: Project) {
         <tr>
           <td ${TDL} style="text-align:left;padding:2px 6px;border:1px solid #ccc;font-size:7px;color:#b45309;background:#fffbeb">VACANCES</td>
           <td ${TDV()}></td>
-          ${sortedDates.map(ds => `<td ${TDV(dd[ds].inDay && dd[ds].vacation ? "background:#fffbeb;color:#b45309;font-weight:bold" : "")}>${dd[ds].inDay && dd[ds].vacation ? "VAC" : ""}</td>`).join("")}
+          ${childDates.map(ds => `<td ${TDV(dd[ds].vacation ? "background:#fffbeb;color:#b45309;font-weight:bold" : "")}>${dd[ds].vacation ? "VAC" : ""}</td>`).join("")}
         </tr>
       </thead>
       <tbody>
