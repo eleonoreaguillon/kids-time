@@ -1059,11 +1059,15 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
   const [importing, setImporting] = useState(false);
   const [roleTab, setRoleTab] = useState<ChildRole | "all">("all");
   const [showArchived, setShowArchived] = useState(false);
+  const [search, setSearch] = useState("");
 
   const activeChildren = project.children.filter(c => !c.archived);
   const archivedChildren = project.children.filter(c => c.archived);
   const rolesPresent = ALL_ROLES.filter(r => activeChildren.some(c => c.role === r));
-  const displayChildren = showArchived ? archivedChildren : (roleTab === "all" ? activeChildren : activeChildren.filter(c => c.role === roleTab));
+  const baseChildren = showArchived ? archivedChildren : (roleTab === "all" ? activeChildren : activeChildren.filter(c => c.role === roleTab));
+  const displayChildren = search.trim()
+    ? baseChildren.filter(c => normalize(`${c.first_name} ${c.last_name}`).includes(normalize(search)) || normalize(`${c.last_name} ${c.first_name}`).includes(normalize(search)))
+    : baseChildren;
 
   function downloadTemplate() {
     const csv = "Nom Prénom;Statut (role/silhouette/figurant);Date de naissance (JJ/MM/AAAA);Début vacances (JJ/MM/AAAA);Fin vacances (JJ/MM/AAAA)\nMartin Léa;role;15/03/2015;01/07/2025;31/08/2025\n";
@@ -1129,6 +1133,19 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
         <Btn onClick={onAdd} className="text-xs py-2 px-3">+ Ajouter</Btn>
       </div>
 
+      {/* Recherche */}
+      <div className="relative mb-3">
+        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm">🔍</span>
+        <input
+          type="text"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Rechercher un enfant…"
+          className="w-full bg-slate-800/80 border border-slate-600 rounded-xl pl-8 pr-8 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
+        />
+        {search && <button onClick={() => setSearch("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white text-sm">✕</button>}
+      </div>
+
       {/* Import zone */}
       <div className="bg-slate-900/40 border border-slate-700 rounded-xl p-3 mb-4">
         <div className="text-[10px] text-slate-400 uppercase tracking-wider mb-2">Import Excel / CSV</div>
@@ -1168,7 +1185,7 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
       )}
 
       {displayChildren.length === 0
-        ? <div className="text-slate-500 text-center py-10 text-sm">{showArchived ? "Aucun enfant archivé" : "Aucun enfant enregistré"}</div>
+        ? <div className="text-slate-500 text-center py-10 text-sm">{search.trim() ? `Aucun résultat pour « ${search} »` : showArchived ? "Aucun enfant archivé" : "Aucun enfant enregistré"}</div>
         : <div className="space-y-2">{displayChildren.map(c => (
           <div key={c.id} className={`bg-slate-900/50 border rounded-xl px-3 py-3 ${c.archived ? "border-slate-700/40 opacity-60" : "border-slate-700"}`}>
             <div className="flex items-center gap-3">
