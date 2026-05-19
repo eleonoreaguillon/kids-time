@@ -1520,6 +1520,8 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
                 onStart={t => onStartSession(id, t)} onCancelSession={() => onCancelSession(id)}
                 onCancelLastEvent={() => onCancelLastEvent(id)} onReopenSession={() => onReopenSession(id)}
                 onEditEventTime={(idx, t) => onEditEventTime(id, idx, t)} onEditStartTime={t => onEditStartTime(id, t)} onEditEndTime={t => onEditEndTime(id, t)}
+                onApplyEvent={(type, t) => onApplyEvent([id], type, t)}
+                onEndSession={t => onEndSessions([id], t)}
                 dateStr={dateStr} />;
             })}</div>
         }
@@ -1576,16 +1578,19 @@ function SingleStartButton({ onStart, dateStr }: { onStart: (t?: string) => void
 }
 
 // Fix #1: compact ChildCard with expand/collapse
-function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, vacation, isSelected, onSelect, isExpanded, onToggleExpand, onStart, onCancelSession, onCancelLastEvent, onReopenSession, onEditEventTime, onEditStartTime, onEditEndTime, dateStr }: {
+function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, vacation, isSelected, onSelect, isExpanded, onToggleExpand, onStart, onCancelSession, onCancelLastEvent, onReopenSession, onEditEventTime, onEditStartTime, onEditEndTime, onApplyEvent, onEndSession, dateStr }: {
   child: Child; session: Session | undefined; stats: SessionStats | null;
   maxWork: number; breakAfter: number; maxAmplitude: number; vacation: boolean;
   isSelected: boolean; onSelect: () => void;
   isExpanded: boolean; onToggleExpand: () => void;
   onStart: (t?: string) => void; onCancelSession: () => void; onCancelLastEvent: () => void; onReopenSession: () => void;
   onEditEventTime: (idx: number, t: string) => void; onEditStartTime: (t: string) => void; onEditEndTime: (t: string) => void;
+  onApplyEvent: (type: "pause_start" | "pause_end" | "dejeuner_start" | "dejeuner_end", t?: string) => void;
+  onEndSession: (t?: string) => void;
   dateStr: string;
 }) {
   const [editingIdx, setEditingIdx] = useState<number | "start" | "end" | null>(null);
+  const [indivModal, setIndivModal] = useState<{ type: "pause" | "dejeuner" | "resume" | "end" } | null>(null);
   const [editTime, setEditTime] = useState("");
   const workPct  = stats ? Math.min(100, (stats.workMin / maxWork) * 100) : 0;
   const ampPct   = stats ? Math.min(100, (stats.amplitudeMin / maxAmplitude) * 100) : 0;
@@ -1669,6 +1674,16 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
               {ampCrit && <div className="bg-red-900/30 border border-red-700 rounded-lg px-3 py-2 text-xs text-red-300">🚫 Amplitude maximale dépassée</div>}
               {pastTimeLimit && <div className="bg-orange-900/30 border border-orange-600 rounded-lg px-3 py-2 text-xs text-orange-300">🕗 Limite horaire {limitTimeStr} dépassée{derogation ? " (dérogation)" : ""}</div>}
 
+              {/* Boutons d'action individuels */}
+              {session?.status !== "done" && (
+                <div className="flex gap-2 flex-wrap">
+                  {session?.status === "working" && <button onClick={() => setIndivModal({ type: "pause" })} className="flex-1 text-xs bg-amber-900/60 text-amber-300 border border-amber-800 px-3 py-2 rounded-lg whitespace-nowrap">⏸ Pause</button>}
+                  {session?.status === "working" && <button onClick={() => setIndivModal({ type: "dejeuner" })} className="flex-1 text-xs bg-orange-900/60 text-orange-300 border border-orange-700 px-3 py-2 rounded-lg whitespace-nowrap">🍽 Déjeuner</button>}
+                  {(session?.status === "paused" || session?.status === "dejeuner") && <button onClick={() => setIndivModal({ type: "resume" })} className="flex-1 text-xs bg-emerald-900/60 text-emerald-300 border border-emerald-800 px-3 py-2 rounded-lg whitespace-nowrap">▶ Reprise</button>}
+                  {session?.start_time && <button onClick={() => setIndivModal({ type: "end" })} className="flex-1 text-xs bg-slate-700/60 text-slate-300 border border-slate-600 px-3 py-2 rounded-lg whitespace-nowrap">⏹ Fin</button>}
+                </div>
+              )}
+
               <div className="bg-slate-800/40 border border-slate-700/50 rounded-lg p-3">
                 <div className="text-[9px] text-slate-500 uppercase tracking-wider mb-2">Chronologie — touchez l&apos;heure pour modifier</div>
                 <div className="space-y-2">
@@ -1689,6 +1704,16 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
           </div>
         </div>
       )}
+
+      {indivModal && <TimeActionModal type={indivModal.type} childCount={1} dateStr={dateStr}
+        onConfirm={timeISO => {
+          if      (indivModal.type === "pause")    onApplyEvent("pause_start", timeISO);
+          else if (indivModal.type === "dejeuner") onApplyEvent("dejeuner_start", timeISO);
+          else if (indivModal.type === "resume")   onApplyEvent("pause_end", timeISO);
+          else if (indivModal.type === "end")      onEndSession(timeISO);
+          setIndivModal(null);
+        }}
+        onClose={() => setIndivModal(null)} />}
     </div>
   );
 }
