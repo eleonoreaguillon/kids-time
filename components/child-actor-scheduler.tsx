@@ -349,7 +349,7 @@ function exportChildAllDays(project: Project, child: Child) {
       <td>${vacation ? "🌴 Vac." : "🏫 Scol."}</td>
       <td>${session?.start_time ? formatTime(session.start_time) : "--"}</td>
       <td>${session?.end_time ? formatTime(session.end_time) : "--"}</td>
-      <td><span style="color:${ampOver > 0 ? "#dc2626" : "#16a34a"}">${stats ? formatMinutes(stats.amplitudeMin) : "--"} / ${formatMinutes(maxAmp)}</span></td>
+      <td><span style="color:${ampOver > 0 ? "#dc2626" : stats && stats.amplitudeMin === maxAmp ? "#ea580c" : "#16a34a"}">${stats ? formatMinutes(stats.amplitudeMin) : "--"} / ${formatMinutes(maxAmp)}</span></td>
       <td><span style="color:${workOver > 0 ? "#dc2626" : "#16a34a"}">${stats ? formatMinutes(stats.workMin) : "--"} / ${formatMinutes(maxWork)}</span></td>
       <td>${stats ? formatMinutes(stats.dejeunerMin) : "--"}</td>
       <td>${stats ? formatMinutes(stats.validBreakMin) : "--"}</td>
@@ -588,7 +588,7 @@ function exportProjectGlobalPDF(project: Project) {
         <tr>
           <td ${TDL} style="text-align:left;padding:3px 6px;border:1px solid #ccc;font-size:8px;background:#f4f6fb;font-weight:bold;white-space:nowrap">Amplitude de présence</td>
           <td ${TDT()}></td>
-          ${cells(d => `<b>${fmtHHMM(d.stats?.amplitudeMin ?? 0)}</b>`)}
+          ${cells(d => { const amp = d.stats?.amplitudeMin ?? 0; const over = amp > d.maxAmp; const warn = amp === d.maxAmp && amp > 0; return `<b style="color:${over ? "#dc2626" : warn ? "#ea580c" : "inherit"}">${fmtHHMM(amp)}</b>`; })}
         </tr>
         <tr><td ${TDL}>Amplitude autorisée</td><td ${TDT()}></td>${cells(d => fmtHHMM(d.maxAmp))}</tr>
         <tr>
@@ -1591,6 +1591,7 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
   const ampPct   = stats ? Math.min(100, (stats.amplitudeMin / maxAmplitude) * 100) : 0;
   const workCrit = stats && stats.workMin > maxWork;
   const ampCrit  = stats && stats.amplitudeMin > maxAmplitude;
+  const ampWarn  = stats && stats.amplitudeMin === maxAmplitude;
   const breakDue = stats?.timeSinceBreak != null && stats.timeSinceBreak >= breakAfter;
 
   // Alerte 20h (ou heure de dérogation si définie pour cette date)
@@ -1607,7 +1608,7 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
   }
   const events = session?.events || [];
 
-  const statusColor = session?.status === "working" ? "border-emerald-700" : session?.status === "paused" ? "border-amber-600" : session?.status === "dejeuner" ? "border-orange-500" : session?.status === "done" ? "border-slate-600" : workCrit || ampCrit ? "border-red-700" : pastTimeLimit ? "border-orange-600" : breakDue ? "border-amber-600" : "border-slate-700";
+  const statusColor = session?.status === "working" ? "border-emerald-700" : session?.status === "paused" ? "border-amber-600" : session?.status === "dejeuner" ? "border-orange-500" : session?.status === "done" ? "border-slate-600" : workCrit || ampCrit ? "border-red-700" : ampWarn ? "border-orange-500" : pastTimeLimit ? "border-orange-600" : breakDue ? "border-amber-600" : "border-slate-700";
 
   return (
     <div className={`rounded-xl border transition-all ${isSelected ? "border-blue-500 bg-blue-950/20" : statusColor + " bg-slate-900/50"}`}>
@@ -1628,6 +1629,7 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
             {!session?.start_time && <span className="text-[10px] text-slate-500">Non démarré</span>}
             {workCrit && <span className="text-[10px] text-red-400">🚫 Trav.</span>}
             {ampCrit && <span className="text-[10px] text-red-400">🚫 Ampl.</span>}
+            {ampWarn && !ampCrit && <span className="text-[10px] text-orange-400">⚠️ Ampl.</span>}
             {breakDue && !workCrit && <span className="text-[10px] text-amber-400">⚠️ Pause</span>}
             {pastTimeLimit && <span className="text-[10px] text-orange-400">🕗 {limitTimeStr} dépassé</span>}
           </div>
@@ -1636,7 +1638,7 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
         {stats && (
           <div className="flex flex-col gap-1 w-16 flex-shrink-0" onClick={onToggleExpand}>
             <div className="h-1 bg-slate-800 rounded-full overflow-hidden"><div className={`h-full rounded-full ${workCrit ? "bg-red-500" : workPct > 80 ? "bg-amber-500" : "bg-blue-500"}`} style={{ width: `${workPct}%` }} /></div>
-            <div className="h-1 bg-slate-800 rounded-full overflow-hidden"><div className={`h-full rounded-full ${ampCrit ? "bg-red-500" : ampPct > 85 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${ampPct}%` }} /></div>
+            <div className="h-1 bg-slate-800 rounded-full overflow-hidden"><div className={`h-full rounded-full ${ampCrit ? "bg-red-500" : ampWarn ? "bg-orange-500" : ampPct > 85 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${ampPct}%` }} /></div>
           </div>
         )}
         <button onClick={onToggleExpand} className="text-slate-500 w-8 h-8 flex items-center justify-center">{isExpanded ? "▲" : "▼"}</button>
@@ -1651,11 +1653,11 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
           {stats && (
             <>
               <div className="grid grid-cols-3 gap-2">
-                {([{ l: "Travail", v: stats.workMin, max: maxWork, crit: workCrit }, { l: "🍽 Déjeuner", v: stats.dejeunerMin }, { l: "Pauses val.", v: stats.validBreakMin, sub: `tot.${formatMinutes(stats.breakMin)}` }, { l: "Amplitude", v: stats.amplitudeMin, max: maxAmplitude, crit: ampCrit }] as any[]).map(({ l, v, max, sub, crit }) => (
-                  <div key={l} className={`rounded-lg p-2 text-center border ${crit ? "bg-red-900/30 border-red-800" : "bg-slate-800/50 border-slate-700"}`}>
-                    <div className={`text-base font-bold ${crit ? "text-red-400" : "text-white"}`}>{formatMinutes(v)}</div>
+                {([{ l: "Travail", v: stats.workMin, max: maxWork, crit: workCrit }, { l: "🍽 Déjeuner", v: stats.dejeunerMin }, { l: "Pauses val.", v: stats.validBreakMin, sub: `tot.${formatMinutes(stats.breakMin)}` }, { l: "Amplitude", v: stats.amplitudeMin, max: maxAmplitude, crit: ampCrit, warn: ampWarn }] as any[]).map(({ l, v, max, sub, crit, warn }) => (
+                  <div key={l} className={`rounded-lg p-2 text-center border ${crit ? "bg-red-900/30 border-red-800" : warn ? "bg-orange-900/30 border-orange-700" : "bg-slate-800/50 border-slate-700"}`}>
+                    <div className={`text-base font-bold ${crit ? "text-red-400" : warn ? "text-orange-400" : "text-white"}`}>{formatMinutes(v)}</div>
                     <div className="text-[9px] text-slate-400">{l}</div>
-                    {max && <div className={`text-[9px] ${crit ? "text-red-400" : "text-slate-500"}`}>/ {formatMinutes(max)}</div>}
+                    {max && <div className={`text-[9px] ${crit ? "text-red-400" : warn ? "text-orange-400" : "text-slate-500"}`}>/ {formatMinutes(max)}</div>}
                     {sub && <div className="text-[9px] text-slate-500">{sub}</div>}
                   </div>
                 ))}
@@ -1663,6 +1665,7 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
 
               {breakDue && !workCrit && <div className="bg-amber-900/30 border border-amber-700 rounded-lg px-3 py-2 text-xs text-amber-300">⚠️ Pause obligatoire — {formatMinutes(stats.timeSinceBreak)} consécutifs</div>}
               {workCrit && <div className="bg-red-900/30 border border-red-700 rounded-lg px-3 py-2 text-xs text-red-300">🚫 Temps de travail maximum dépassé</div>}
+              {ampWarn && !ampCrit && <div className="bg-orange-900/30 border border-orange-600 rounded-lg px-3 py-2 text-xs text-orange-300">⚠️ Amplitude maximale atteinte</div>}
               {ampCrit && <div className="bg-red-900/30 border border-red-700 rounded-lg px-3 py-2 text-xs text-red-300">🚫 Amplitude maximale dépassée</div>}
               {pastTimeLimit && <div className="bg-orange-900/30 border border-orange-600 rounded-lg px-3 py-2 text-xs text-orange-300">🕗 Limite horaire {limitTimeStr} dépassée{derogation ? " (dérogation)" : ""}</div>}
 
