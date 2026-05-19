@@ -299,6 +299,7 @@ function exportDayToPDF(project: Project, dateStr: string) {
     return `<table><tr><th colspan="4">${child.first_name} ${child.last_name}${child.role ? ` — ${ROLE_LABELS[child.role as ChildRole]}` : ""} — ${getAge(child.dob)} ans (${band} ans) — ${vacation ? "Vacances" : "Scolaire"}</th></tr>
       <tr><td><b>Convocation</b><br>${session?.start_time ? formatTime(session.start_time) : "--"}</td><td><b>Fin</b><br>${session?.end_time ? formatTime(session.end_time) : "--"}</td><td><b>Amplitude</b><br>${stats ? formatMinutes(stats.amplitudeMin) : "--"}</td><td><b>Max amplitude</b><br>${formatMinutes(maxAmp)}</td></tr>
       <tr><td><b>Travail total</b><br>${stats ? formatMinutes(stats.workMin) : "--"}</td><td><b>Max travail</b><br>${formatMinutes(maxWork)}</td><td><b>Dépass. travail</b><br><span class="${workOver > 0 ? "over" : "ok"}">${workOver > 0 ? formatMinutes(workOver) : "OK"}</span></td><td><b>Dépass. amplitude</b><br><span class="${ampOver > 0 ? "over" : "ok"}">${ampOver > 0 ? formatMinutes(ampOver) : "OK"}</span></td></tr>
+      ${(() => { const derog = (child.derogations || []).find((d: Derogation) => d.date === dateStr); const over20h = !derog && session?.end_time != null && new Date(session.end_time) > new Date(`${dateStr}T20:00:00`); return over20h ? `<tr><td colspan="4" style="color:#dc2626;font-weight:bold;background:#fff5f5">🚫 Dépassement 20h — fin à ${formatTime(session!.end_time)} — aucune dérogation enregistrée</td></tr>` : ""; })()}
       <tr><td><b>🍽 Déjeuner</b><br>${stats ? formatMinutes(stats.dejeunerMin) : "--"}</td><td><b>Plages déjeuner</b><br>${dStr}</td><td><b>Pauses valides</b><br>${stats ? formatMinutes(stats.validBreakMin) : "--"}</td><td><b>Plages de pauses</b><br>${bStr}</td></tr></table>`;
   };
   const allRows = buildExportRows(project, dateStr);
@@ -344,11 +345,13 @@ function exportChildAllDays(project: Project, child: Child) {
     const bStr = stats?.breakSlots.filter(b => b.valid && b.kind === "pause").map((b) => `${formatTime(b.start)}-${formatTime(b.end)} (${formatMinutes(b.durationMin)})`).join(", ") || "--";
     const dStr = stats?.breakSlots.filter(b => b.kind === "dejeuner").map((b) => `🍽 ${formatTime(b.start)}-${formatTime(b.end)} (${formatMinutes(b.durationMin)})`).join(", ") || "--";
     const dateLabel = new Date(dateStr + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "short", day: "numeric", month: "short" });
+    const derogForDay = (child.derogations || []).find(d => d.date === dateStr);
+    const endAfter20h = !derogForDay && session?.end_time != null && new Date(session.end_time) > new Date(`${dateStr}T20:00:00`);
     return `<tr>
       <td>${dateLabel}</td>
       <td>${vacation ? "🌴 Vac." : "🏫 Scol."}</td>
       <td>${session?.start_time ? formatTime(session.start_time) : "--"}</td>
-      <td>${session?.end_time ? formatTime(session.end_time) : "--"}</td>
+      <td>${session?.end_time ? `<span style="color:${endAfter20h ? "#dc2626" : "inherit"};font-weight:${endAfter20h ? "bold" : "normal"}">${formatTime(session.end_time)}${endAfter20h ? " 🚫" : ""}</span>` : "--"}</td>
       <td><span style="color:${ampOver > 0 ? "#dc2626" : stats && stats.amplitudeMin === maxAmp ? "#ea580c" : "#16a34a"}">${stats ? formatMinutes(stats.amplitudeMin) : "--"} / ${formatMinutes(maxAmp)}</span></td>
       <td><span style="color:${workOver > 0 ? "#dc2626" : "#16a34a"}">${stats ? formatMinutes(stats.workMin) : "--"} / ${formatMinutes(maxWork)}</span></td>
       <td>${stats ? formatMinutes(stats.dejeunerMin) : "--"}</td>
@@ -546,6 +549,12 @@ function exportProjectGlobalPDF(project: Project) {
         if (!d.inDay) return `<td ${TDV(d.vacation ? "background:#fffbeb" : "")}></td>`;
         return `<td ${TDV(d.vacation ? "background:#fffbeb" : "")}>${fn(d)}</td>`;
       }).join("");
+    const cellsWithDate = (fn: (d: DayData, ds: string) => string) =>
+      sortedDates.map(ds => {
+        const d = dd[ds];
+        if (!d.inDay) return `<td ${TDV(d.vacation ? "background:#fffbeb" : "")}></td>`;
+        return `<td ${TDV(d.vacation ? "background:#fffbeb" : "")}>${fn(d, ds)}</td>`;
+      }).join("");
 
     html += `<div class="child-block"><table>
       <thead>
@@ -579,6 +588,11 @@ function exportProjectGlobalPDF(project: Project) {
           ${cells(d => `<b>${fmtHHMM(d.stats?.workMin ?? 0)}</b>`)}
         </tr>
         <tr><td ${TDL}>Heure de fin de journée</td><td ${TDT()}></td>${cells(d => d.session?.end_time ? formatTime(d.session.end_time) : "")}</tr>
+        <tr>
+          <td ${TDL} style="text-align:left;padding:3px 6px;border:1px solid #ccc;font-size:8px;background:#fff5f5;color:#dc2626;white-space:nowrap">Dépassement 20h (sans dérogation)</td>
+          <td ${TDT()}></td>
+          ${cellsWithDate((d, ds) => { const derog = (child.derogations || []).find(x => x.date === ds); const over = !derog && d.session?.end_time != null && new Date(d.session.end_time) > new Date(`${ds}T20:00:00`); return over ? `<span style="color:#dc2626;font-weight:bold">🚫 ${formatTime(d.session!.end_time)}</span>` : ""; })}
+        </tr>
         <tr><td ${TDL}>Temps de travail autorisé</td><td ${TDT()}></td>${cells(d => fmtHHMM(d.maxWork))}</tr>
         <tr>
           <td ${TDL} style="text-align:left;padding:3px 6px;border:1px solid #ccc;font-size:8px;background:#fff5f5;color:#dc2626;white-space:nowrap">Dépassement temps de travail</td>
@@ -1603,7 +1617,13 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
   const derogation = (child.derogations || []).find(d => d.date === dateStr);
   const limitTimeStr = derogation ? derogation.end_time : "20:00";
   const limitDate = new Date(`${dateStr}T${limitTimeStr}:00`);
+  const limit20h = new Date(`${dateStr}T20:00:00`);
   const pastTimeLimit = session?.start_time != null && session.status !== "done" && new Date() >= limitDate;
+  // Dépassement 20h sans dérogation (session en cours OU terminée après 20h)
+  const past20hNoDerog = !derogation && session?.start_time != null && (
+    (session.status !== "done" && new Date() >= limit20h) ||
+    (session.status === "done" && session.end_time != null && new Date(session.end_time) > limit20h)
+  );
 
   function startEdit(key: number | "start" | "end", iso: string | undefined) { setEditingIdx(key); setEditTime(isoToTimeStr(iso)); }
   function confirmEdit() {
@@ -1636,7 +1656,8 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
             {ampCrit && <span className="text-[10px] text-red-400">🚫 Ampl.</span>}
             {ampWarn && !ampCrit && <span className="text-[10px] text-orange-400">⚠️ Ampl.</span>}
             {breakDue && !workCrit && <span className="text-[10px] text-amber-400">⚠️ Pause</span>}
-            {pastTimeLimit && <span className="text-[10px] text-orange-400">🕗 {limitTimeStr} dépassé</span>}
+            {past20hNoDerog && <span className="text-[10px] text-red-400">🚫 20h</span>}
+            {pastTimeLimit && !past20hNoDerog && <span className="text-[10px] text-orange-400">🕗 {limitTimeStr} dépassé</span>}
           </div>
         </div>
         {/* Mini progress bars */}
@@ -1672,7 +1693,8 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
               {workCrit && <div className="bg-red-900/30 border border-red-700 rounded-lg px-3 py-2 text-xs text-red-300">🚫 Temps de travail maximum dépassé</div>}
               {ampWarn && !ampCrit && <div className="bg-orange-900/30 border border-orange-600 rounded-lg px-3 py-2 text-xs text-orange-300">⚠️ Amplitude maximale atteinte</div>}
               {ampCrit && <div className="bg-red-900/30 border border-red-700 rounded-lg px-3 py-2 text-xs text-red-300">🚫 Amplitude maximale dépassée</div>}
-              {pastTimeLimit && <div className="bg-orange-900/30 border border-orange-600 rounded-lg px-3 py-2 text-xs text-orange-300">🕗 Limite horaire {limitTimeStr} dépassée{derogation ? " (dérogation)" : ""}</div>}
+              {past20hNoDerog && <div className="bg-red-900/30 border border-red-700 rounded-lg px-3 py-2 text-xs text-red-300">🚫 Dépassement 20h — aucune dérogation enregistrée</div>}
+              {pastTimeLimit && !past20hNoDerog && <div className="bg-orange-900/30 border border-orange-600 rounded-lg px-3 py-2 text-xs text-orange-300">🕗 Limite horaire {limitTimeStr} dépassée (dérogation)</div>}
 
               {/* Boutons d'action individuels */}
               {session?.status !== "done" && (
