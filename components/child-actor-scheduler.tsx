@@ -138,6 +138,14 @@ function isVacation(child: Child, dateStr: string): boolean {
   return (child.vacation_periods || []).some(p => dateStr >= p.start && dateStr <= p.end);
 }
 function todayStr(): string { return new Date().toISOString().slice(0, 10); }
+const ROLE_ORDER: Record<string, number> = { role: 0, silhouette: 1, figurant: 2 };
+function sortByRoleThenAlpha(cs: Child[]): Child[] {
+  return [...cs].sort((a, b) => {
+    const ra = ROLE_ORDER[a.role ?? ""] ?? 3, rb = ROLE_ORDER[b.role ?? ""] ?? 3;
+    if (ra !== rb) return ra - rb;
+    return `${a.last_name} ${a.first_name}`.localeCompare(`${b.last_name} ${b.first_name}`, "fr");
+  });
+}
 function nowISO(): string   { return new Date().toISOString(); }
 function timeStrToISO(dateStr: string, timeStr: string): string {
   return new Date(`${dateStr}T${timeStr}:00`).toISOString();
@@ -1114,7 +1122,7 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
   const activeChildren = project.children.filter(c => !c.archived);
   const archivedChildren = project.children.filter(c => c.archived);
   const rolesPresent = ALL_ROLES.filter(r => activeChildren.some(c => c.role === r));
-  const baseChildren = showArchived ? archivedChildren : (roleTab === "all" ? activeChildren : activeChildren.filter(c => c.role === roleTab));
+  const baseChildren = sortByRoleThenAlpha(showArchived ? archivedChildren : (roleTab === "all" ? activeChildren : activeChildren.filter(c => c.role === roleTab)));
   const displayChildren = search.trim()
     ? baseChildren.filter(c => normalize(`${c.first_name} ${c.last_name}`).includes(normalize(search)) || normalize(`${c.last_name} ${c.first_name}`).includes(normalize(search)))
     : baseChildren;
@@ -1508,7 +1516,7 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
   const sessions = day.sessions || {};
   const rules = project.rules;
   const dateLabel = new Date(dateStr + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-  const childrenInDay = childIds.map(id => project.children.find(c => c.id === id)).filter(Boolean) as Child[];
+  const childrenInDay = sortByRoleThenAlpha(childIds.map(id => project.children.find(c => c.id === id)).filter(Boolean) as Child[]);
   const rolesPresent = ALL_ROLES.filter(r => childrenInDay.some(c => c.role === r));
 
   const filteredIds = childIds.filter(id => {
@@ -2057,13 +2065,7 @@ function ReadOnlyView({ project }: { project: Project }) {
   const DN = ["L","M","M","J","V","S","D"];
   const activeChildren = project.children.filter(c => !c.archived);
   const rolesPresent = ALL_ROLES.filter(r => activeChildren.some(c => c.role === r));
-  const roleOrder: Record<string, number> = { role: 0, silhouette: 1, figurant: 2 };
-  const sortChildren = (cs: Child[]) => [...cs].sort((a, b) => {
-    const ra = roleOrder[a.role ?? ""] ?? 3, rb = roleOrder[b.role ?? ""] ?? 3;
-    if (ra !== rb) return ra - rb;
-    return `${a.last_name} ${a.first_name}`.localeCompare(`${b.last_name} ${b.first_name}`, "fr");
-  });
-  const displayChildren = sortChildren(roleTab === "all" ? activeChildren : activeChildren.filter(c => c.role === roleTab));
+  const displayChildren = sortByRoleThenAlpha(roleTab === "all" ? activeChildren : activeChildren.filter(c => c.role === roleTab));
 
   return (
     <div className="min-h-screen bg-[#080d16] text-white pb-10" style={{ fontFamily: "'DM Mono', monospace" }}>
@@ -2125,7 +2127,7 @@ function ReadOnlyView({ project }: { project: Project }) {
               {openDate && project.shootingDays[openDate] && (() => {
                 const day = project.shootingDays[openDate];
                 const dateLabel = new Date(openDate + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
-                const childrenInDay = (day.child_ids || []).map(id => project.children.find(c => c.id === id)).filter(Boolean) as Child[];
+                const childrenInDay = sortByRoleThenAlpha((day.child_ids || []).map(id => project.children.find(c => c.id === id)).filter(Boolean) as Child[]);
                 return (
                   <div className="border border-blue-700/50 rounded-xl overflow-hidden">
                     <div className="px-4 py-3 bg-blue-900/30 border-b border-blue-700/30">
