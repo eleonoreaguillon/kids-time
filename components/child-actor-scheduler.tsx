@@ -947,7 +947,7 @@ function HomeView({ projects, userEmail, onCreate, onOpen, onDelete, onSignOut }
   );
 }
 
-function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild, onRemoveChild, onArchiveChild, onAddGroup, onUpdateGroup, onRemoveGroup, onUpdateRules, onOpenDay, onExportProject, onExportProjectPDF, onExportChildDays }: {
+function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild, onRemoveChild, onArchiveChild, onAddGroup, onUpdateGroup, onRemoveGroup, onUpdateRules, onOpenDay, onExportProject, onExportProjectPDF, onExportChildDays, onDelete }: {
   project: Project; onBack: () => void;
   onAddChild: (c: any) => void; onAddChildren: (cs: any[]) => Promise<void>;
   onUpdateChild: (id: string, d: any) => void; onRemoveChild: (id: string) => void;
