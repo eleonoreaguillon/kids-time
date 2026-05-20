@@ -1547,7 +1547,7 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
                   <label key={c.id} className="flex items-center gap-3 py-2.5 cursor-pointer">
                     <input type="checkbox" className="accent-blue-500 w-5 h-5" checked={isInDay}
                       onChange={() => {
-                        if (isInDay && hasSession) { setPendingRemove(c); }
+                        if (isInDay) { setPendingRemove(c); }
                         else { onToggleChild(c.id); }
                       }} />
                     <span className="text-sm text-slate-200 flex-1">{c.first_name} {c.last_name}</span>
@@ -1610,6 +1610,30 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
           setActionModal(null);
         }}
         onClose={() => setActionModal(null)} />}
+
+      {pendingRemove && (
+        <Modal title="Retirer de la journée ?" onClose={() => setPendingRemove(null)}>
+          <div className="space-y-4">
+            {sessions[pendingRemove.id]?.start_time ? (
+              <div className="bg-red-900/30 border border-red-700 rounded-lg px-4 py-3 text-sm text-red-300">
+                🚫 <b>{pendingRemove.first_name} {pendingRemove.last_name}</b> a des données enregistrées pour cette journée.<br />
+                <span className="text-xs mt-1 block text-red-400">Les heures de travail, pauses et événements seront définitivement perdus.</span>
+              </div>
+            ) : (
+              <div className="bg-slate-800/60 border border-slate-600 rounded-lg px-4 py-3 text-sm text-slate-300">
+                Retirer <b>{pendingRemove.first_name} {pendingRemove.last_name}</b> de cette journée de tournage ?
+              </div>
+            )}
+            <div className="flex gap-3">
+              <Btn variant="ghost" className="flex-1" onClick={() => setPendingRemove(null)}>Annuler</Btn>
+              <button onClick={() => { onToggleChild(pendingRemove.id); setPendingRemove(null); }}
+                className={`flex-1 py-3 rounded-xl font-bold text-sm ${sessions[pendingRemove.id]?.start_time ? "bg-red-700" : "bg-slate-600"} text-white`}>
+                Retirer
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
