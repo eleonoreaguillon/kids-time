@@ -1203,6 +1203,7 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
   const [roleTab, setRoleTab] = useState<ChildRole | "all">("all");
   const [showArchived, setShowArchived] = useState(false);
   const [search, setSearch] = useState("");
+  const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
 
   const activeChildren = project.children.filter(c => !c.archived);
   const archivedChildren = project.children.filter(c => c.archived);
@@ -1390,7 +1391,15 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
                 ? <button onClick={() => onArchive(c.id, true)} className="text-[10px] text-amber-400 border border-amber-800/60 px-2 py-1 rounded-lg">📦 Archiver</button>
                 : <button onClick={() => onArchive(c.id, false)} className="text-[10px] text-emerald-400 border border-emerald-800/60 px-2 py-1 rounded-lg">↩ Désarchiver</button>
               }
-              <button onClick={() => onRemove(c.id)} className="text-[10px] text-red-400 border border-red-800/60 px-2 py-1 rounded-lg ml-auto">🗑</button>
+              {confirmRemoveId === c.id ? (
+                <div className="flex items-center gap-1 ml-auto">
+                  <span className="text-[10px] text-red-300">Supprimer ?</span>
+                  <button onClick={() => { onRemove(c.id); setConfirmRemoveId(null); }} className="text-[10px] text-white bg-red-700 hover:bg-red-600 px-2 py-1 rounded-lg">Oui</button>
+                  <button onClick={() => setConfirmRemoveId(null)} className="text-[10px] text-slate-400 border border-slate-700 px-2 py-1 rounded-lg">Non</button>
+                </div>
+              ) : (
+                <button onClick={() => setConfirmRemoveId(c.id)} className="text-[10px] text-red-400 border border-red-800/60 px-2 py-1 rounded-lg ml-auto">🗑</button>
+              )}
             </div>
           </div>
         ))}</div>
