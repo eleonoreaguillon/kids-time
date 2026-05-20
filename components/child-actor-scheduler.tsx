@@ -2048,6 +2048,16 @@ function ReadOnlyView({ project }: { project: Project }) {
   const [tab, setTab] = useState<"calendar" | "children">("calendar");
   const [openDate, setOpenDate] = useState<string | null>(null);
   const [openChild, setOpenChild] = useState<string | null>(null);
+  const [calCur, setCalCur] = useState(() => {
+    if (sortedDates.length > 0) { const d = new Date(sortedDates[0] + "T12:00:00"); return new Date(d.getFullYear(), d.getMonth(), 1); }
+    const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), 1);
+  });
+  const [roleTab, setRoleTab] = useState<ChildRole | "all">("all");
+  const MN = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
+  const DN = ["L","M","M","J","V","S","D"];
+  const activeChildren = project.children.filter(c => !c.archived);
+  const rolesPresent = ALL_ROLES.filter(r => activeChildren.some(c => c.role === r));
+  const displayChildren = roleTab === "all" ? activeChildren : activeChildren.filter(c => c.role === roleTab);
 
   return (
     <div className="min-h-screen bg-[#080d16] text-white pb-10" style={{ fontFamily: "'DM Mono', monospace" }}>
@@ -2067,39 +2077,59 @@ function ReadOnlyView({ project }: { project: Project }) {
           ))}
         </div>
 
-        {tab === "calendar" && (
-          <div className="space-y-2">
-            {sortedDates.map(dateStr => {
-              const day = project.shootingDays[dateStr];
-              const dateLabel = new Date(dateStr + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
-              const childrenInDay = (day.child_ids || []).map(id => project.children.find(c => c.id === id)).filter(Boolean) as Child[];
-              if (childrenInDay.length === 0) return null;
-              const isOpen = openDate === dateStr;
-              const hasAlert = childrenInDay.some(child => {
-                const session = day.sessions?.[child.id];
-                const vacation = isVacation(child, dateStr);
-                const band = getAgeBand(child.dob);
-                const period: Period = vacation ? "vacation" : "school";
-                const stats = computeSessionStats(session, project.rules);
-                return stats && (stats.workMin > project.rules.maxWorkMinutes[band][period] || stats.amplitudeMin > project.rules.maxAmplitudeMinutes);
-              });
-              return (
-                <div key={dateStr} className="border border-slate-700 rounded-xl overflow-hidden">
-                  <button onClick={() => setOpenDate(isOpen ? null : dateStr)} className="w-full flex items-center justify-between px-4 py-3 bg-slate-900/50 hover:bg-slate-800/60 transition-colors text-left">
-                    <div>
+        {tab === "calendar" && (() => {
+          const y = calCur.getFullYear(), m = calCur.getMonth();
+          const firstDay = (new Date(y, m, 1).getDay() + 6) % 7, daysInMonth = new Date(y, m + 1, 0).getDate();
+          const cells = [...Array(firstDay).fill(null), ...Array.from({ length: daysInMonth }, (_, i) => i + 1)];
+          function ds(d: number) { return `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`; }
+          return (
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <button onClick={() => setCalCur(new Date(y, m - 1, 1))} className="text-slate-400 w-10 h-10 rounded-lg border border-slate-700 flex items-center justify-center text-lg">‹</button>
+                <h2 className="font-bold text-base" style={{ fontFamily: "Syne, sans-serif" }}>{MN[m]} {y}</h2>
+                <button onClick={() => setCalCur(new Date(y, m + 1, 1))} className="text-slate-400 w-10 h-10 rounded-lg border border-slate-700 flex items-center justify-center text-lg">›</button>
+              </div>
+              <div className="grid grid-cols-7 gap-1 mb-1">{DN.map((d, i) => <div key={i} className="text-center text-[10px] text-slate-500 py-1 uppercase tracking-wider">{d}</div>)}</div>
+              <div className="grid grid-cols-7 gap-1 mb-4">
+                {cells.map((d, i) => {
+                  if (!d) return <div key={i} />;
+                  const s = ds(d);
+                  const dayData = project.shootingDays[s];
+                  const count = (dayData?.child_ids || []).filter(id => project.children.find(c => c.id === id)).length;
+                  const isShoot = count > 0, isToday = s === todayStr(), isOpen = openDate === s;
+                  const hasAlert = isShoot && (dayData.child_ids || []).some(id => {
+                    const child = project.children.find(c => c.id === id); if (!child) return false;
+                    const session = dayData.sessions?.[id];
+                    const vacation = isVacation(child, s);
+                    const band = getAgeBand(child.dob);
+                    const period: Period = vacation ? "vacation" : "school";
+                    const stats = computeSessionStats(session, project.rules);
+                    return stats && (stats.workMin > project.rules.maxWorkMinutes[band][period] || stats.amplitudeMin > project.rules.maxAmplitudeMinutes);
+                  });
+                  return (
+                    <button key={i} onClick={() => isShoot ? setOpenDate(isOpen ? null : s) : undefined}
+                      className={`rounded-xl py-2.5 text-sm transition-all ${isShoot ? `cursor-pointer ${isOpen ? "bg-blue-700/60 border-blue-400" : "bg-blue-900/50 border-blue-600"} border text-blue-200` : "bg-slate-900/40 border border-slate-800 text-slate-600 cursor-default"} ${isToday ? "ring-2 ring-blue-400" : ""}`}>
+                      <div className="font-bold text-sm">{d}</div>
+                      {isShoot && <div className="text-[9px] text-blue-400">{count}👦</div>}
+                      {hasAlert && <div className="text-[9px] text-red-400">⚠</div>}
+                    </button>
+                  );
+                })}
+              </div>
+              {openDate && project.shootingDays[openDate] && (() => {
+                const day = project.shootingDays[openDate];
+                const dateLabel = new Date(openDate + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
+                const childrenInDay = (day.child_ids || []).map(id => project.children.find(c => c.id === id)).filter(Boolean) as Child[];
+                return (
+                  <div className="border border-blue-700/50 rounded-xl overflow-hidden">
+                    <div className="px-4 py-3 bg-blue-900/30 border-b border-blue-700/30">
                       <div className="font-bold text-white text-sm capitalize">{dateLabel}</div>
-                      <div className="text-[10px] text-slate-400">{childrenInDay.length} enfant(s)</div>
+                      <div className="text-[10px] text-blue-300">{childrenInDay.length} enfant(s) · cliquez sur un jour pour fermer</div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      {hasAlert && <span className="text-red-400 text-xs">⚠</span>}
-                      <span className="text-slate-500 text-xs">{isOpen ? "▲" : "▼"}</span>
-                    </div>
-                  </button>
-                  {isOpen && (
-                    <div className="p-3 space-y-3 bg-slate-900/20">
+                    <div className="p-3 space-y-3">
                       {childrenInDay.map(child => {
                         const session = day.sessions?.[child.id];
-                        const vacation = isVacation(child, dateStr);
+                        const vacation = isVacation(child, openDate);
                         const band = getAgeBand(child.dob);
                         const period: Period = vacation ? "vacation" : "school";
                         const maxWork = project.rules.maxWorkMinutes[band][period];
@@ -2114,9 +2144,9 @@ function ReadOnlyView({ project }: { project: Project }) {
                           <div key={child.id} className="bg-slate-800/50 rounded-xl p-3 space-y-2">
                             <div className="flex items-center gap-2">
                               <div className="w-7 h-7 rounded-full bg-blue-900/60 flex items-center justify-center text-blue-300 font-bold text-[10px] flex-shrink-0">{child.first_name?.[0]}{child.last_name?.[0]}</div>
-                              <div>
+                              <div className="flex-1">
                                 <div className="text-sm font-semibold text-white">{child.first_name} {child.last_name}</div>
-                                <div className="text-[10px] text-slate-400">{getAge(child.dob)} ans · {band} ans{vacation ? " · 🌴 Vacances" : " · Scolaire"}</div>
+                                <div className="flex items-center gap-2"><div className="text-[10px] text-slate-400">{getAge(child.dob)} ans{vacation ? " · 🌴 Vacances" : ""}</div>{child.role && <RoleBadge role={child.role} />}</div>
                               </div>
                             </div>
                             {session?.start_time ? (
@@ -2135,78 +2165,89 @@ function ReadOnlyView({ project }: { project: Project }) {
                         );
                       })}
                     </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
+                  </div>
+                );
+              })()}
+            </div>
+          );
+        })()}
 
         {tab === "children" && (
-          <div className="space-y-2">
-            {project.children.filter(c => !c.archived).map(child => {
-              const band = getAgeBand(child.dob);
-              const daysPresent = sortedDates.filter(d => (project.shootingDays[d].child_ids || []).includes(child.id));
-              const isOpen = openChild === child.id;
-              const hasAlert = daysPresent.some(dateStr => {
-                const session = project.shootingDays[dateStr].sessions?.[child.id];
-                const vacation = isVacation(child, dateStr);
-                const period: Period = vacation ? "vacation" : "school";
-                const stats = computeSessionStats(session, project.rules);
-                return stats && (stats.workMin > project.rules.maxWorkMinutes[band][period] || stats.amplitudeMin > project.rules.maxAmplitudeMinutes);
-              });
-              return (
-                <div key={child.id} className="border border-slate-700 rounded-xl overflow-hidden">
-                  <button onClick={() => setOpenChild(isOpen ? null : child.id)} className="w-full flex items-center gap-3 px-4 py-3 bg-slate-900/50 hover:bg-slate-800/60 transition-colors text-left">
-                    <div className="w-9 h-9 rounded-full bg-blue-900/60 flex items-center justify-center text-blue-300 font-bold text-sm flex-shrink-0">{child.first_name?.[0]}{child.last_name?.[0]}</div>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-semibold text-white">{child.first_name} {child.last_name}</div>
-                      <div className="text-[10px] text-slate-400">{getAge(child.dob)} ans · tranche {band} ans · {daysPresent.length} jour(s)</div>
-                    </div>
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      {hasAlert && <span className="text-red-400 text-xs">⚠</span>}
-                      <span className="text-slate-500 text-xs">{isOpen ? "▲" : "▼"}</span>
-                    </div>
-                  </button>
-                  {isOpen && daysPresent.length > 0 && (
-                    <div className="p-3 space-y-2 bg-slate-900/20">
-                      {daysPresent.map(dateStr => {
-                        const day = project.shootingDays[dateStr];
-                        const session = day.sessions?.[child.id];
-                        const vacation = isVacation(child, dateStr);
-                        const period: Period = vacation ? "vacation" : "school";
-                        const maxWork = project.rules.maxWorkMinutes[band][period];
-                        const maxAmp = project.rules.maxAmplitudeMinutes;
-                        const stats = computeSessionStats(session, project.rules);
-                        const workOver = stats ? stats.workMin > maxWork : false;
-                        const ampOver = stats ? stats.amplitudeMin > maxAmp : false;
-                        const ampWarn = stats ? stats.amplitudeMin === maxAmp : false;
-                        const pauseSlots = stats?.breakSlots.filter(b => b.valid && b.kind === "pause") || [];
-                        const dejSlots = stats?.breakSlots.filter(b => b.kind === "dejeuner") || [];
-                        const dateLabel = new Date(dateStr + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
-                        return (
-                          <div key={dateStr} className="bg-slate-800/50 rounded-xl p-3 space-y-2">
-                            <div className="text-xs font-semibold text-blue-300 capitalize">{dateLabel}{vacation ? " · 🌴 Vacances" : ""}</div>
-                            {session?.start_time ? (
-                              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[10px]">
-                                <div className="text-slate-400">Convocation</div><div className="text-white font-medium">{formatTime(session.start_time)}</div>
-                                <div className="text-slate-400">Fin</div><div className="text-white font-medium">{session.end_time ? formatTime(session.end_time) : <span className="text-blue-400">en cours</span>}</div>
-                                <div className="text-slate-400">Travail</div>
-                                <div className={`font-semibold ${workOver ? "text-red-400" : "text-emerald-400"}`}>{stats ? formatMinutes(stats.workMin) : "--"} <span className="text-slate-500 font-normal">/ {formatMinutes(maxWork)}</span>{workOver && <span className="text-red-400 ml-1">⚠ +{formatMinutes(stats!.workMin - maxWork)}</span>}</div>
-                                <div className="text-slate-400">Amplitude</div>
-                                <div className={`font-semibold ${ampOver ? "text-red-400" : ampWarn ? "text-orange-400" : "text-slate-300"}`}>{stats ? formatMinutes(stats.amplitudeMin) : "--"} <span className="text-slate-500 font-normal">/ {formatMinutes(maxAmp)}</span>{ampOver && <span className="text-red-400 ml-1">⚠ +{formatMinutes(stats!.amplitudeMin - maxAmp)}</span>}</div>
-                                {stats && stats.dejeunerMin > 0 && <><div className="text-slate-400">🍽 Déjeuner</div><div className="text-slate-300">{formatMinutes(stats.dejeunerMin)}{dejSlots.length > 0 && <span className="text-slate-500 ml-1">({dejSlots.map(s => `${formatTime(s.start)}→${formatTime(s.end)}`).join(", ")})</span>}</div></>}
-                                {stats && stats.validBreakMin > 0 && <><div className="text-slate-400">Pauses</div><div className="text-slate-300">{formatMinutes(stats.validBreakMin)}{pauseSlots.length > 0 && <span className="text-slate-500 ml-1">({pauseSlots.map(s => `${formatTime(s.start)}→${formatTime(s.end)}`).join(", ")})</span>}</div></>}
-                              </div>
-                            ) : <div className="text-[10px] text-slate-500">Non démarré</div>}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+          <div>
+            {rolesPresent.length > 0 && (
+              <div className="flex gap-0 border-b border-slate-800 mb-3 overflow-x-auto">
+                <button onClick={() => setRoleTab("all")} className={`px-3 py-2 text-xs whitespace-nowrap transition-colors border-b-2 ${roleTab === "all" ? "border-blue-500 text-white" : "border-transparent text-slate-500"}`}>Tous ({activeChildren.length})</button>
+                {rolesPresent.map(r => <button key={r} onClick={() => setRoleTab(r)} className={`px-3 py-2 text-xs whitespace-nowrap transition-colors border-b-2 ${roleTab === r ? "border-blue-500 text-white" : "border-transparent text-slate-500"}`}>{ROLE_LABELS[r]} ({activeChildren.filter(c => c.role === r).length})</button>)}
+              </div>
+            )}
+            <div className="space-y-2">
+              {displayChildren.map(child => {
+                const band = getAgeBand(child.dob);
+                const daysPresent = sortedDates.filter(d => (project.shootingDays[d].child_ids || []).includes(child.id));
+                const isOpen = openChild === child.id;
+                const hasAlert = daysPresent.some(dateStr => {
+                  const session = project.shootingDays[dateStr].sessions?.[child.id];
+                  const vacation = isVacation(child, dateStr);
+                  const period: Period = vacation ? "vacation" : "school";
+                  const stats = computeSessionStats(session, project.rules);
+                  return stats && (stats.workMin > project.rules.maxWorkMinutes[band][period] || stats.amplitudeMin > project.rules.maxAmplitudeMinutes);
+                });
+                return (
+                  <div key={child.id} className="border border-slate-700 rounded-xl overflow-hidden">
+                    <button onClick={() => setOpenChild(isOpen ? null : child.id)} className="w-full flex items-center gap-3 px-4 py-3 bg-slate-900/50 hover:bg-slate-800/60 transition-colors text-left">
+                      <div className="w-9 h-9 rounded-full bg-blue-900/60 flex items-center justify-center text-blue-300 font-bold text-sm flex-shrink-0">{child.first_name?.[0]}{child.last_name?.[0]}</div>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-semibold text-white">{child.first_name} {child.last_name}</div>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="text-[10px] text-slate-400">{getAge(child.dob)} ans · {band} ans · {daysPresent.length} jour(s)</span>
+                          {child.role && <RoleBadge role={child.role} />}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {hasAlert && <span className="text-red-400 text-xs">⚠</span>}
+                        <span className="text-slate-500 text-xs">{isOpen ? "▲" : "▼"}</span>
+                      </div>
+                    </button>
+                    {isOpen && daysPresent.length > 0 && (
+                      <div className="p-3 space-y-2 bg-slate-900/20">
+                        {daysPresent.map(dateStr => {
+                          const day = project.shootingDays[dateStr];
+                          const session = day.sessions?.[child.id];
+                          const vacation = isVacation(child, dateStr);
+                          const period: Period = vacation ? "vacation" : "school";
+                          const maxWork = project.rules.maxWorkMinutes[band][period];
+                          const maxAmp = project.rules.maxAmplitudeMinutes;
+                          const stats = computeSessionStats(session, project.rules);
+                          const workOver = stats ? stats.workMin > maxWork : false;
+                          const ampOver = stats ? stats.amplitudeMin > maxAmp : false;
+                          const ampWarn = stats ? stats.amplitudeMin === maxAmp : false;
+                          const pauseSlots = stats?.breakSlots.filter(b => b.valid && b.kind === "pause") || [];
+                          const dejSlots = stats?.breakSlots.filter(b => b.kind === "dejeuner") || [];
+                          const dateLabel = new Date(dateStr + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
+                          return (
+                            <div key={dateStr} className="bg-slate-800/50 rounded-xl p-3 space-y-2">
+                              <div className="text-xs font-semibold text-blue-300 capitalize">{dateLabel}{vacation ? " · 🌴 Vacances" : ""}</div>
+                              {session?.start_time ? (
+                                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[10px]">
+                                  <div className="text-slate-400">Convocation</div><div className="text-white font-medium">{formatTime(session.start_time)}</div>
+                                  <div className="text-slate-400">Fin</div><div className="text-white font-medium">{session.end_time ? formatTime(session.end_time) : <span className="text-blue-400">en cours</span>}</div>
+                                  <div className="text-slate-400">Travail</div>
+                                  <div className={`font-semibold ${workOver ? "text-red-400" : "text-emerald-400"}`}>{stats ? formatMinutes(stats.workMin) : "--"} <span className="text-slate-500 font-normal">/ {formatMinutes(maxWork)}</span>{workOver && <span className="text-red-400 ml-1">⚠ +{formatMinutes(stats!.workMin - maxWork)}</span>}</div>
+                                  <div className="text-slate-400">Amplitude</div>
+                                  <div className={`font-semibold ${ampOver ? "text-red-400" : ampWarn ? "text-orange-400" : "text-slate-300"}`}>{stats ? formatMinutes(stats.amplitudeMin) : "--"} <span className="text-slate-500 font-normal">/ {formatMinutes(maxAmp)}</span>{ampOver && <span className="text-red-400 ml-1">⚠ +{formatMinutes(stats!.amplitudeMin - maxAmp)}</span>}</div>
+                                  {stats && stats.dejeunerMin > 0 && <><div className="text-slate-400">🍽 Déjeuner</div><div className="text-slate-300">{formatMinutes(stats.dejeunerMin)}{dejSlots.length > 0 && <span className="text-slate-500 ml-1">({dejSlots.map(s => `${formatTime(s.start)}→${formatTime(s.end)}`).join(", ")})</span>}</div></>}
+                                  {stats && stats.validBreakMin > 0 && <><div className="text-slate-400">Pauses</div><div className="text-slate-300">{formatMinutes(stats.validBreakMin)}{pauseSlots.length > 0 && <span className="text-slate-500 ml-1">({pauseSlots.map(s => `${formatTime(s.start)}→${formatTime(s.end)}`).join(", ")})</span>}</div></>}
+                                </div>
+                              ) : <div className="text-[10px] text-slate-500">Non démarré</div>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 
