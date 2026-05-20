@@ -1941,9 +1941,14 @@ function ShareModal({ project, onGenerateToken, onClose }: { project: Project; o
         ) : (
           <div className="space-y-3">
             <div className="bg-slate-800/80 border border-slate-600 rounded-lg px-3 py-2 text-xs text-blue-300 break-all font-mono">{shareUrl}</div>
-            <button onClick={copyLink} className={`w-full py-3 rounded-xl font-bold text-sm transition-colors ${copied ? "bg-emerald-700 text-white" : "bg-slate-700 hover:bg-slate-600 text-white"}`}>
-              {copied ? "✓ Lien copié !" : "📋 Copier le lien"}
-            </button>
+            <div className="flex gap-2">
+              <button onClick={copyLink} className={`flex-1 py-3 rounded-xl font-bold text-sm transition-colors ${copied ? "bg-emerald-700 text-white" : "bg-slate-700 hover:bg-slate-600 text-white"}`}>
+                {copied ? "✓ Lien copié !" : "📋 Copier le lien"}
+              </button>
+              <button onClick={generate} disabled={loading} className="py-3 px-3 rounded-xl text-xs text-slate-400 hover:text-white border border-slate-700 hover:border-slate-500 transition-colors" title="Regénérer un nouveau lien">
+                {loading ? "…" : "🔄"}
+              </button>
+            </div>
             <div className="border-t border-slate-700 pt-3">
               <div className="text-xs text-slate-300 font-semibold mb-1.5">🔒 Mot de passe (optionnel)</div>
               <div className="flex gap-2">
