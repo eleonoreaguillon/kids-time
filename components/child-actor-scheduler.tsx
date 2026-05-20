@@ -2057,7 +2057,13 @@ function ReadOnlyView({ project }: { project: Project }) {
   const DN = ["L","M","M","J","V","S","D"];
   const activeChildren = project.children.filter(c => !c.archived);
   const rolesPresent = ALL_ROLES.filter(r => activeChildren.some(c => c.role === r));
-  const displayChildren = roleTab === "all" ? activeChildren : activeChildren.filter(c => c.role === roleTab);
+  const roleOrder: Record<string, number> = { role: 0, silhouette: 1, figurant: 2 };
+  const sortChildren = (cs: Child[]) => [...cs].sort((a, b) => {
+    const ra = roleOrder[a.role ?? ""] ?? 3, rb = roleOrder[b.role ?? ""] ?? 3;
+    if (ra !== rb) return ra - rb;
+    return `${a.last_name} ${a.first_name}`.localeCompare(`${b.last_name} ${b.first_name}`, "fr");
+  });
+  const displayChildren = sortChildren(roleTab === "all" ? activeChildren : activeChildren.filter(c => c.role === roleTab));
 
   return (
     <div className="min-h-screen bg-[#080d16] text-white pb-10" style={{ fontFamily: "'DM Mono', monospace" }}>
