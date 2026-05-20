@@ -749,11 +749,36 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
   }, []);
 
+  const VAPID_PUBLIC_KEY = "BNqqNLZ1roWHMAFWMzIZpgh4n6hDXeziMWITj9gmc-3UoiHMjAcI9duyC_som3FlSstGrnsC6SX9kDuzH90MXlQ";
+
+  async function subscribeToPush(projectId: string) {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) {
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: VAPID_PUBLIC_KEY,
+        });
+      }
+      await supabase.from("push_subscriptions").upsert({
+        user_id: userId,
+        project_id: projectId,
+        subscription: sub.toJSON(),
+      }, { onConflict: "user_id,project_id" });
+    } catch (e) { console.error("Push subscribe error", e); }
+  }
+
   useEffect(() => {
     if ("Notification" in window && Notification.permission === "default") {
-      Notification.requestPermission();
+      Notification.requestPermission().then(perm => {
+        if (perm === "granted" && activeProject) subscribeToPush(activeProject.id);
+      });
+    } else if ("Notification" in window && Notification.permission === "granted" && activeProject) {
+      subscribeToPush(activeProject.id);
     }
-  }, []);
+  }, [activeProject?.id]);
 
   useEffect(() => {
     if (view !== "shooting" || !activeProject || !activeDate) return;

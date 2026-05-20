@@ -13,6 +13,26 @@ self.addEventListener('activate', e => {
   );
 });
 
+self.addEventListener('push', e => {
+  const data = e.data?.json() || {};
+  e.waitUntil(
+    self.registration.showNotification(data.title || 'KidsTime', {
+      body: data.body || '',
+      icon: '/favicon.ico',
+      tag: data.tag || 'kidstime',
+      renotify: true,
+    })
+  );
+});
+
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(clients.matchAll({ type: 'window' }).then(cs => {
+    if (cs.length) cs[0].focus();
+    else clients.openWindow('/');
+  }));
+});
+
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET') return;
