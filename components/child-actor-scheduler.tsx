@@ -1519,12 +1519,11 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
   const childrenInDay = sortByRoleThenAlpha(childIds.map(id => project.children.find(c => c.id === id)).filter(Boolean) as Child[]);
   const rolesPresent = ALL_ROLES.filter(r => childrenInDay.some(c => c.role === r));
 
-  const filteredIds = childIds.filter(id => {
-    const c = project.children.find(ch => ch.id === id); if (!c) return false;
+  const filteredIds = childrenInDay.filter(c => {
     if (search.trim()) { const q = normalize(search); if (!normalize(`${c.first_name} ${c.last_name}`).includes(q) && !normalize(`${c.last_name} ${c.first_name}`).includes(q)) return false; }
-    if (roleTab === "all") return true;
-    return c.role === roleTab;
-  });
+    if (roleTab !== "all" && c.role !== roleTab) return false;
+    return true;
+  }).map(c => c.id);
 
   function toggleSelect(id: string) { setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }); }
   const selList = [...selected];
