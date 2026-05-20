@@ -852,10 +852,24 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     if (!navigator.onLine) {
       try {
         const cached = localStorage.getItem(`kidstime_project_${id}`);
-        if (cached) { setActiveProject(JSON.parse(cached)); setView("project"); setLoading(false); return; }
+        if (cached) {
+          const f = JSON.parse(cached);
+          setActiveProject(f);
+          const today = todayStr();
+          const todayDay = f.shootingDays?.[today];
+          if (todayDay && (todayDay.child_ids || []).length > 0) { setActiveDate(today); setView("shooting"); }
+          else setView("project");
+          setLoading(false); return;
+        }
       } catch {}
     }
-    const f = await loadFullProject(id); setActiveProject(f); setView("project"); setLoading(false);
+    const f = await loadFullProject(id);
+    setActiveProject(f);
+    const today = todayStr();
+    const todayDay = f.shootingDays?.[today];
+    if (todayDay && (todayDay.child_ids || []).length > 0) { setActiveDate(today); setView("shooting"); }
+    else setView("project");
+    setLoading(false);
   }
 
   async function refreshActive() {
@@ -1737,6 +1751,15 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
   const [expandedId, setExpandedId] = useState<string | null>(null); // Fix #1: collapsed cards
 
   useEffect(() => { const t = setInterval(() => setTick(n => n + 1), 15000); return () => clearInterval(t); }, []);
+
+  useEffect(() => {
+    if (!("wakeLock" in navigator)) return;
+    let lock: any = null;
+    (navigator as any).wakeLock.request("screen").then((l: any) => { lock = l; }).catch(() => {});
+    const reacquire = () => { if (document.visibilityState === "visible") (navigator as any).wakeLock.request("screen").then((l: any) => { lock = l; }).catch(() => {}); };
+    document.addEventListener("visibilitychange", reacquire);
+    return () => { document.removeEventListener("visibilitychange", reacquire); lock?.release(); };
+  }, []);
 
   const day = project.shootingDays[dateStr] || { child_ids: [], sessions: {} };
   const childIds = day.child_ids || [];
