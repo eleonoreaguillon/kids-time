@@ -1482,21 +1482,38 @@ function SettingsTab({ rules, onUpdateRules, projectName, onDelete, projectId }:
   }, [projectId, logsPage]);
 
   const BL: Record<AgeBand, string> = { "0-2": "< 3 ans", "3-5": "3–5 ans", "6-11": "6–11 ans", "12-16": "12–16 ans" };
+
+  function setRule(key: string, value: string) {
+    onUpdateRules(r => ({ ...r, [key]: Number(value) }));
+  }
+
   return (
     <div className="space-y-4">
-      <h2 className="font-bold text-base mb-1" style={{ fontFamily: "Syne, sans-serif" }}>Paramètres DRIEETS</h2>
-      <div className="bg-blue-900/20 border border-blue-700/50 rounded-xl px-3 py-2 text-xs text-blue-300">
-        Ces paramètres sont définis par la réglementation DRIEETS et ne peuvent pas être modifiés.
-      </div>
+      <h2 className="font-bold text-base mb-1" style={{ fontFamily: "Syne, sans-serif" }}>Paramètres</h2>
+
+      {/* Paramètres ajustables */}
       <div className="space-y-2">
-        {([["Amplitude max", "maxAmplitudeMinutes"], ["Pause minimum", "minBreakMinutes"], ["Repos entre journées", "minRestBetweenDays"]] as const).map(([label, key]) => (
+        <h3 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Paramètres ajustables</h3>
+        {([["Amplitude max", "maxAmplitudeMinutes", 60, 720, 30], ["Pause minimum", "minBreakMinutes", 5, 60, 1]] as const).map(([label, key, min, max, step]) => (
           <div key={key} className="bg-slate-900/50 border border-slate-700 rounded-xl p-3 flex items-center justify-between">
             <div className="text-sm text-white">{label}</div>
-            <div className="bg-slate-800/80 border border-slate-600 rounded-lg px-3 py-1.5 text-slate-300 text-sm font-mono">
-              {formatMinutes((rules as any)[key])}
+            <div className="flex items-center gap-2">
+              <input type="number" min={min} max={max} step={step} value={(rules as any)[key]}
+                onChange={e => setRule(key, e.target.value)}
+                className="w-20 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-white text-sm text-center focus:outline-none focus:border-blue-500" />
+              <span className="text-xs text-slate-400 w-12">{formatMinutes((rules as any)[key])}</span>
             </div>
           </div>
         ))}
+      </div>
+
+      {/* Paramètres verrouillés DRIEETS */}
+      <div className="space-y-2">
+        <h3 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Définis par la réglementation DRIEETS</h3>
+        <div className="bg-slate-900/50 border border-slate-700 rounded-xl p-3 flex items-center justify-between">
+          <div className="text-sm text-white">Repos entre journées</div>
+          <div className="bg-slate-800/80 border border-slate-700 rounded-lg px-3 py-1.5 text-slate-400 text-sm font-mono">{formatMinutes(rules.minRestBetweenDays)}</div>
+        </div>
       </div>
       {(["maxWorkMinutes", "mandatoryBreakAfterMinutes"] as const).map(rk => (
         <div key={rk}>
