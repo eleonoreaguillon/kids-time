@@ -2075,7 +2075,7 @@ function ReadOnlyView({ project }: { project: Project }) {
               return (
                 <div key={dateStr} className="bg-slate-900/50 border border-slate-700 rounded-xl p-4">
                   <div className="font-bold text-white text-sm mb-3 capitalize">{dateLabel}</div>
-                  <div className="space-y-2">
+                  <div className="space-y-3">
                     {childrenInDay.map(child => {
                       const session = day.sessions?.[child.id];
                       const vacation = isVacation(child, dateStr);
@@ -2087,20 +2087,37 @@ function ReadOnlyView({ project }: { project: Project }) {
                       const workOver = stats ? stats.workMin > maxWork : false;
                       const ampOver = stats ? stats.amplitudeMin > maxAmp : false;
                       const ampWarn = stats ? stats.amplitudeMin === maxAmp : false;
+                      const pauseSlots = stats?.breakSlots.filter(b => b.valid && b.kind === "pause") || [];
+                      const dejSlots = stats?.breakSlots.filter(b => b.kind === "dejeuner") || [];
                       return (
-                        <div key={child.id} className="flex items-center gap-3 bg-slate-800/50 rounded-lg px-3 py-2.5">
-                          <div className="w-7 h-7 rounded-full bg-blue-900/60 flex items-center justify-center text-blue-300 font-bold text-[10px] flex-shrink-0">{child.first_name?.[0]}{child.last_name?.[0]}</div>
-                          <div className="flex-1 min-w-0">
-                            <div className="text-sm font-semibold text-white truncate">{child.first_name} {child.last_name}</div>
-                            <div className="text-[10px] text-slate-400">{getAge(child.dob)} ans{vacation ? " · 🌴 Vac." : ""}</div>
+                        <div key={child.id} className="bg-slate-800/50 rounded-xl p-3 space-y-2">
+                          <div className="flex items-center gap-2">
+                            <div className="w-7 h-7 rounded-full bg-blue-900/60 flex items-center justify-center text-blue-300 font-bold text-[10px] flex-shrink-0">{child.first_name?.[0]}{child.last_name?.[0]}</div>
+                            <div>
+                              <div className="text-sm font-semibold text-white">{child.first_name} {child.last_name}</div>
+                              <div className="text-[10px] text-slate-400">{getAge(child.dob)} ans · tranche {band} ans{vacation ? " · 🌴 Vacances" : " · Scolaire"}</div>
+                            </div>
                           </div>
                           {session?.start_time ? (
-                            <div className="text-right text-[10px] space-y-0.5 flex-shrink-0">
-                              <div className="text-slate-300">{formatTime(session.start_time)}{session.end_time ? ` → ${formatTime(session.end_time)}` : " → en cours"}</div>
-                              {stats && <div className={`font-semibold ${workOver ? "text-red-400" : "text-emerald-400"}`}>Trav. {formatMinutes(stats.workMin)}</div>}
-                              {stats && <div className={ampOver ? "text-red-400" : ampWarn ? "text-orange-400" : "text-slate-400"}>Ampl. {formatMinutes(stats.amplitudeMin)}</div>}
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[10px] pt-1 border-t border-slate-700">
+                              <div className="text-slate-400">Convocation</div>
+                              <div className="text-white font-medium">{formatTime(session.start_time)}</div>
+                              <div className="text-slate-400">Fin</div>
+                              <div className="text-white font-medium">{session.end_time ? formatTime(session.end_time) : <span className="text-blue-400">en cours</span>}</div>
+                              <div className="text-slate-400">Travail</div>
+                              <div className={`font-semibold ${workOver ? "text-red-400" : "text-emerald-400"}`}>{stats ? formatMinutes(stats.workMin) : "--"} <span className="text-slate-500 font-normal">/ {formatMinutes(maxWork)}</span>{workOver && <span className="text-red-400 ml-1">⚠ +{formatMinutes(stats!.workMin - maxWork)}</span>}</div>
+                              <div className="text-slate-400">Amplitude</div>
+                              <div className={`font-semibold ${ampOver ? "text-red-400" : ampWarn ? "text-orange-400" : "text-slate-300"}`}>{stats ? formatMinutes(stats.amplitudeMin) : "--"} <span className="text-slate-500 font-normal">/ {formatMinutes(maxAmp)}</span>{ampOver && <span className="text-red-400 ml-1">⚠ +{formatMinutes(stats!.amplitudeMin - maxAmp)}</span>}</div>
+                              {stats && stats.dejeunerMin > 0 && <>
+                                <div className="text-slate-400">🍽 Déjeuner</div>
+                                <div className="text-slate-300">{formatMinutes(stats.dejeunerMin)}{dejSlots.length > 0 && <span className="text-slate-500 ml-1">({dejSlots.map(s => `${formatTime(s.start)}→${formatTime(s.end)}`).join(", ")})</span>}</div>
+                              </>}
+                              {stats && stats.validBreakMin > 0 && <>
+                                <div className="text-slate-400">Pauses</div>
+                                <div className="text-slate-300">{formatMinutes(stats.validBreakMin)}{pauseSlots.length > 0 && <span className="text-slate-500 ml-1">({pauseSlots.map(s => `${formatTime(s.start)}→${formatTime(s.end)}`).join(", ")})</span>}</div>
+                              </>}
                             </div>
-                          ) : <div className="text-[10px] text-slate-500">Non démarré</div>}
+                          ) : <div className="text-[10px] text-slate-500 pt-1 border-t border-slate-700">Non démarré</div>}
                         </div>
                       );
                     })}
@@ -2126,7 +2143,7 @@ function ReadOnlyView({ project }: { project: Project }) {
                     </div>
                   </div>
                   {daysPresent.length > 0 && (
-                    <div className="space-y-1.5">
+                    <div className="space-y-2">
                       {daysPresent.map(dateStr => {
                         const day = project.shootingDays[dateStr];
                         const session = day.sessions?.[child.id];
@@ -2138,17 +2155,32 @@ function ReadOnlyView({ project }: { project: Project }) {
                         const workOver = stats ? stats.workMin > maxWork : false;
                         const ampOver = stats ? stats.amplitudeMin > maxAmp : false;
                         const ampWarn = stats ? stats.amplitudeMin === maxAmp : false;
-                        const dateLabel = new Date(dateStr + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "short", day: "numeric", month: "short" });
+                        const pauseSlots = stats?.breakSlots.filter(b => b.valid && b.kind === "pause") || [];
+                        const dejSlots = stats?.breakSlots.filter(b => b.kind === "dejeuner") || [];
+                        const dateLabel = new Date(dateStr + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
                         return (
-                          <div key={dateStr} className="flex items-center gap-2 bg-slate-800/50 rounded-lg px-3 py-2 text-[10px]">
-                            <span className="text-slate-400 capitalize w-24 flex-shrink-0">{dateLabel}</span>
+                          <div key={dateStr} className="bg-slate-800/50 rounded-xl p-3 space-y-2">
+                            <div className="text-xs font-semibold text-blue-300 capitalize">{dateLabel}{vacation ? " · 🌴 Vacances" : ""}</div>
                             {session?.start_time ? (
-                              <>
-                                <span className="text-slate-300 flex-1">{formatTime(session.start_time)}{session.end_time ? ` → ${formatTime(session.end_time)}` : " → en cours"}</span>
-                                {stats && <span className={`font-semibold ${workOver ? "text-red-400" : "text-emerald-400"}`}>Trav. {formatMinutes(stats.workMin)}</span>}
-                                {stats && <span className={ampOver ? "text-red-400" : ampWarn ? "text-orange-400" : "text-slate-400"}>Ampl. {formatMinutes(stats.amplitudeMin)}</span>}
-                              </>
-                            ) : <span className="text-slate-500 flex-1">Non démarré</span>}
+                              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[10px]">
+                                <div className="text-slate-400">Convocation</div>
+                                <div className="text-white font-medium">{formatTime(session.start_time)}</div>
+                                <div className="text-slate-400">Fin</div>
+                                <div className="text-white font-medium">{session.end_time ? formatTime(session.end_time) : <span className="text-blue-400">en cours</span>}</div>
+                                <div className="text-slate-400">Travail</div>
+                                <div className={`font-semibold ${workOver ? "text-red-400" : "text-emerald-400"}`}>{stats ? formatMinutes(stats.workMin) : "--"} <span className="text-slate-500 font-normal">/ {formatMinutes(maxWork)}</span>{workOver && <span className="text-red-400 ml-1">⚠ +{formatMinutes(stats!.workMin - maxWork)}</span>}</div>
+                                <div className="text-slate-400">Amplitude</div>
+                                <div className={`font-semibold ${ampOver ? "text-red-400" : ampWarn ? "text-orange-400" : "text-slate-300"}`}>{stats ? formatMinutes(stats.amplitudeMin) : "--"} <span className="text-slate-500 font-normal">/ {formatMinutes(maxAmp)}</span>{ampOver && <span className="text-red-400 ml-1">⚠ +{formatMinutes(stats!.amplitudeMin - maxAmp)}</span>}</div>
+                                {stats && stats.dejeunerMin > 0 && <>
+                                  <div className="text-slate-400">🍽 Déjeuner</div>
+                                  <div className="text-slate-300">{formatMinutes(stats.dejeunerMin)}{dejSlots.length > 0 && <span className="text-slate-500 ml-1">({dejSlots.map(s => `${formatTime(s.start)}→${formatTime(s.end)}`).join(", ")})</span>}</div>
+                                </>}
+                                {stats && stats.validBreakMin > 0 && <>
+                                  <div className="text-slate-400">Pauses</div>
+                                  <div className="text-slate-300">{formatMinutes(stats.validBreakMin)}{pauseSlots.length > 0 && <span className="text-slate-500 ml-1">({pauseSlots.map(s => `${formatTime(s.start)}→${formatTime(s.end)}`).join(", ")})</span>}</div>
+                                </>}
+                              </div>
+                            ) : <div className="text-[10px] text-slate-500">Non démarré</div>}
                           </div>
                         );
                       })}
