@@ -70,6 +70,7 @@ interface Project {
   groups: Group[];
   shootingDays: Record<string, ShootingDay>;
   share_token?: string;
+  share_password?: string;
 }
 
 interface SessionStats {
@@ -1901,6 +1902,9 @@ function ShareModal({ project, onGenerateToken, onClose }: { project: Project; o
   const [token, setToken] = useState(project.share_token || "");
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [password, setPassword] = useState(project.share_password || "");
+  const [pwSaved, setPwSaved] = useState(false);
+  const [pwSaving, setPwSaving] = useState(false);
   const shareUrl = token ? `${window.location.origin}?share=${token}` : "";
 
   async function generate() {
@@ -1914,6 +1918,14 @@ function ShareModal({ project, onGenerateToken, onClose }: { project: Project; o
     navigator.clipboard.writeText(shareUrl);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  }
+
+  async function savePassword() {
+    setPwSaving(true);
+    await supabase.from("projects").update({ share_password: password || null }).eq("id", project.id);
+    setPwSaving(false);
+    setPwSaved(true);
+    setTimeout(() => setPwSaved(false), 2000);
   }
 
   return (
@@ -1932,7 +1944,22 @@ function ShareModal({ project, onGenerateToken, onClose }: { project: Project; o
             <button onClick={copyLink} className={`w-full py-3 rounded-xl font-bold text-sm transition-colors ${copied ? "bg-emerald-700 text-white" : "bg-slate-700 hover:bg-slate-600 text-white"}`}>
               {copied ? "✓ Lien copié !" : "📋 Copier le lien"}
             </button>
-            <div className="text-[10px] text-slate-500 text-center">Ce lien donne accès à toutes les données du projet en lecture seule.</div>
+            <div className="border-t border-slate-700 pt-3">
+              <div className="text-xs text-slate-300 font-semibold mb-1.5">🔒 Mot de passe (optionnel)</div>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  placeholder="Laisser vide = sans mot de passe"
+                  className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-blue-500"
+                />
+                <button onClick={savePassword} disabled={pwSaving} className={`px-3 py-2 rounded-lg text-xs font-bold transition-colors ${pwSaved ? "bg-emerald-700 text-white" : "bg-slate-700 hover:bg-slate-600 text-white"}`}>
+                  {pwSaved ? "✓" : pwSaving ? "…" : "Sauver"}
+                </button>
+              </div>
+              <div className="text-[10px] text-slate-500 mt-1">Si défini, les visiteurs devront saisir ce mot de passe pour accéder au projet.</div>
+            </div>
           </div>
         )}
         <Btn variant="ghost" className="w-full" onClick={onClose}>Fermer</Btn>
@@ -1946,19 +1973,62 @@ function SharedProjectView({ token }: { token: string }) {
   const [project, setProject] = useState<Project | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [needsPassword, setNeedsPassword] = useState(false);
+  const [pwInput, setPwInput] = useState("");
+  const [pwError, setPwError] = useState("");
+  const [pwChecking, setPwChecking] = useState(false);
 
-  useEffect(() => {
-    supabase.rpc("get_project_by_token", { p_token: token }).then(({ data, error: e }) => {
-      if (e || !data) { setError("Lien invalide ou expiré."); setLoading(false); return; }
-      const shootingDays: Record<string, ShootingDay> = {};
-      Object.entries(data.shootingDays || {}).forEach(([date, d]: [string, any]) => { shootingDays[date] = d; });
-      const mappedChildren = (data.children || []).map((c: any) => ({ ...c, role: c.child_role ?? undefined }));
-      setProject({ ...data.project, children: mappedChildren, groups: data.groups || [], shootingDays });
-      setLoading(false);
-    });
-  }, [token]);
+  async function loadProject(password?: string) {
+    const params: any = { p_token: token };
+    if (password) params.p_password = password;
+    const { data, error: e } = await supabase.rpc("get_project_by_token", params);
+    if (e || !data) { setError("Lien invalide ou expiré."); setLoading(false); setPwChecking(false); return; }
+    if (data.error === "password_required") {
+      setNeedsPassword(true); setLoading(false); setPwChecking(false);
+      if (password) setPwError("Mot de passe incorrect.");
+      return;
+    }
+    const shootingDays: Record<string, ShootingDay> = {};
+    Object.entries(data.shootingDays || {}).forEach(([date, d]: [string, any]) => { shootingDays[date] = d; });
+    const mappedChildren = (data.children || []).map((c: any) => ({ ...c, role: c.child_role ?? undefined }));
+    setProject({ ...data.project, children: mappedChildren, groups: data.groups || [], shootingDays });
+    setNeedsPassword(false); setLoading(false); setPwChecking(false);
+  }
+
+  useEffect(() => { loadProject(); }, [token]);
+
+  function submitPassword(e: React.FormEvent) {
+    e.preventDefault();
+    if (!pwInput.trim()) return;
+    setPwError(""); setPwChecking(true);
+    loadProject(pwInput.trim());
+  }
 
   if (loading) return <div className="min-h-screen bg-[#080d16] flex items-center justify-center"><div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" /></div>;
+
+  if (needsPassword) return (
+    <div className="min-h-screen bg-[#080d16] flex items-center justify-center px-4" style={{ fontFamily: "'DM Mono', monospace" }}>
+      <div className="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl p-6">
+        <h1 className="text-xl font-extrabold mb-1 text-center" style={{ fontFamily: "Syne, sans-serif" }}><span className="text-white">KIDS</span><span className="text-blue-500">TIME</span></h1>
+        <div className="text-center text-sm text-slate-400 mb-5">Ce projet est protégé par un mot de passe.</div>
+        <form onSubmit={submitPassword} className="space-y-3">
+          <input
+            type="password"
+            value={pwInput}
+            onChange={e => { setPwInput(e.target.value); setPwError(""); }}
+            placeholder="Mot de passe"
+            autoFocus
+            className="w-full bg-slate-800 border border-slate-600 rounded-xl px-4 py-3 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-blue-500"
+          />
+          {pwError && <div className="text-xs text-red-400">{pwError}</div>}
+          <button type="submit" disabled={pwChecking || !pwInput.trim()} className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white py-3 rounded-xl font-bold text-sm">
+            {pwChecking ? "Vérification…" : "Accéder au projet"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+
   if (error || !project) return (
     <div className="min-h-screen bg-[#080d16] flex items-center justify-center px-4" style={{ fontFamily: "'DM Mono', monospace" }}>
       <div className="text-center"><div className="text-red-400 text-4xl mb-4">⚠️</div><div className="text-white font-bold mb-2">{error || "Erreur"}</div><div className="text-slate-400 text-sm">Ce lien de partage est invalide ou a expiré.</div></div>
@@ -1970,6 +2040,8 @@ function SharedProjectView({ token }: { token: string }) {
 // ─── Read-only view ───────────────────────────────────────────────────────────
 function ReadOnlyView({ project }: { project: Project }) {
   const sortedDates = Object.keys(project.shootingDays).sort();
+  const [tab, setTab] = useState<"calendar" | "children">("calendar");
+
   return (
     <div className="min-h-screen bg-[#080d16] text-white pb-10" style={{ fontFamily: "'DM Mono', monospace" }}>
       <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@700;800&display=swap" rel="stylesheet" />
@@ -1979,50 +2051,110 @@ function ReadOnlyView({ project }: { project: Project }) {
       <div className="max-w-2xl mx-auto px-4 py-6">
         <h1 className="text-2xl font-extrabold mb-1" style={{ fontFamily: "Syne, sans-serif" }}><span className="text-white">KIDS</span><span className="text-blue-500">TIME</span></h1>
         <h2 className="text-lg font-bold text-white mb-1">{project.name}</h2>
-        <div className="text-xs text-slate-400 mb-6">{project.children.length} enfant(s) · {sortedDates.length} jour(s) de tournage</div>
+        <div className="text-xs text-slate-400 mb-4">{project.children.length} enfant(s) · {sortedDates.length} jour(s) de tournage</div>
 
-        <div className="space-y-4">
-          {sortedDates.map(dateStr => {
-            const day = project.shootingDays[dateStr];
-            const dateLabel = new Date(dateStr + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
-            const childrenInDay = (day.child_ids || []).map(id => project.children.find(c => c.id === id)).filter(Boolean) as Child[];
-            if (childrenInDay.length === 0) return null;
-            return (
-              <div key={dateStr} className="bg-slate-900/50 border border-slate-700 rounded-xl p-4">
-                <div className="font-bold text-white text-sm mb-3 capitalize">{dateLabel}</div>
-                <div className="space-y-2">
-                  {childrenInDay.map(child => {
-                    const session = day.sessions?.[child.id];
-                    const vacation = isVacation(child, dateStr);
-                    const band = getAgeBand(child.dob);
-                    const period: Period = vacation ? "vacation" : "school";
-                    const maxWork = project.rules.maxWorkMinutes[band][period];
-                    const maxAmp = project.rules.maxAmplitudeMinutes;
-                    const stats = computeSessionStats(session, project.rules);
-                    const workOver = stats ? stats.workMin > maxWork : false;
-                    const ampOver = stats ? stats.amplitudeMin > maxAmp : false;
-                    return (
-                      <div key={child.id} className="flex items-center gap-3 bg-slate-800/50 rounded-lg px-3 py-2.5">
-                        <div className="w-7 h-7 rounded-full bg-blue-900/60 flex items-center justify-center text-blue-300 font-bold text-[10px] flex-shrink-0">{child.first_name?.[0]}{child.last_name?.[0]}</div>
-                        <div className="flex-1 min-w-0">
-                          <div className="text-sm font-semibold text-white truncate">{child.first_name} {child.last_name}</div>
-                          <div className="text-[10px] text-slate-400">{getAge(child.dob)} ans{vacation ? " · 🌴 Vac." : ""}</div>
-                        </div>
-                        {session?.start_time ? (
-                          <div className="text-right text-[10px] space-y-0.5 flex-shrink-0">
-                            <div className="text-slate-300">{formatTime(session.start_time)}{session.end_time ? ` → ${formatTime(session.end_time)}` : " → en cours"}</div>
-                            {stats && <div className={`font-semibold ${workOver ? "text-red-400" : "text-emerald-400"}`}>Trav. {formatMinutes(stats.workMin)}</div>}
-                            {stats && <div className={`${ampOver ? "text-red-400" : "text-slate-400"}`}>Ampl. {formatMinutes(stats.amplitudeMin)}</div>}
-                          </div>
-                        ) : <div className="text-[10px] text-slate-500">Non démarré</div>}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })}
+        {/* Tabs */}
+        <div className="flex gap-1 mb-5 bg-slate-900/60 p-1 rounded-xl border border-slate-800">
+          {([["calendar", "📅 Calendrier"], ["children", "👦 Enfants"]] as const).map(([key, label]) => (
+            <button key={key} onClick={() => setTab(key)} className={`flex-1 py-2 rounded-lg text-xs font-semibold transition-colors ${tab === key ? "bg-blue-600 text-white" : "text-slate-400 hover:text-white"}`}>{label}</button>
+          ))}
         </div>
+
+        {tab === "calendar" && (
+          <div className="space-y-4">
+            {sortedDates.map(dateStr => {
+              const day = project.shootingDays[dateStr];
+              const dateLabel = new Date(dateStr + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
+              const childrenInDay = (day.child_ids || []).map(id => project.children.find(c => c.id === id)).filter(Boolean) as Child[];
+              if (childrenInDay.length === 0) return null;
+              return (
+                <div key={dateStr} className="bg-slate-900/50 border border-slate-700 rounded-xl p-4">
+                  <div className="font-bold text-white text-sm mb-3 capitalize">{dateLabel}</div>
+                  <div className="space-y-2">
+                    {childrenInDay.map(child => {
+                      const session = day.sessions?.[child.id];
+                      const vacation = isVacation(child, dateStr);
+                      const band = getAgeBand(child.dob);
+                      const period: Period = vacation ? "vacation" : "school";
+                      const maxWork = project.rules.maxWorkMinutes[band][period];
+                      const maxAmp = project.rules.maxAmplitudeMinutes;
+                      const stats = computeSessionStats(session, project.rules);
+                      const workOver = stats ? stats.workMin > maxWork : false;
+                      const ampOver = stats ? stats.amplitudeMin > maxAmp : false;
+                      const ampWarn = stats ? stats.amplitudeMin === maxAmp : false;
+                      return (
+                        <div key={child.id} className="flex items-center gap-3 bg-slate-800/50 rounded-lg px-3 py-2.5">
+                          <div className="w-7 h-7 rounded-full bg-blue-900/60 flex items-center justify-center text-blue-300 font-bold text-[10px] flex-shrink-0">{child.first_name?.[0]}{child.last_name?.[0]}</div>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-semibold text-white truncate">{child.first_name} {child.last_name}</div>
+                            <div className="text-[10px] text-slate-400">{getAge(child.dob)} ans{vacation ? " · 🌴 Vac." : ""}</div>
+                          </div>
+                          {session?.start_time ? (
+                            <div className="text-right text-[10px] space-y-0.5 flex-shrink-0">
+                              <div className="text-slate-300">{formatTime(session.start_time)}{session.end_time ? ` → ${formatTime(session.end_time)}` : " → en cours"}</div>
+                              {stats && <div className={`font-semibold ${workOver ? "text-red-400" : "text-emerald-400"}`}>Trav. {formatMinutes(stats.workMin)}</div>}
+                              {stats && <div className={ampOver ? "text-red-400" : ampWarn ? "text-orange-400" : "text-slate-400"}>Ampl. {formatMinutes(stats.amplitudeMin)}</div>}
+                            </div>
+                          ) : <div className="text-[10px] text-slate-500">Non démarré</div>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {tab === "children" && (
+          <div className="space-y-3">
+            {project.children.filter(c => !c.archived).map(child => {
+              const band = getAgeBand(child.dob);
+              const daysPresent = sortedDates.filter(d => (project.shootingDays[d].child_ids || []).includes(child.id));
+              return (
+                <div key={child.id} className="bg-slate-900/50 border border-slate-700 rounded-xl p-4">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-9 h-9 rounded-full bg-blue-900/60 flex items-center justify-center text-blue-300 font-bold text-sm flex-shrink-0">{child.first_name?.[0]}{child.last_name?.[0]}</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-semibold text-white">{child.first_name} {child.last_name}</div>
+                      <div className="text-[10px] text-slate-400">{getAge(child.dob)} ans · tranche {band} ans · {daysPresent.length} jour(s)</div>
+                    </div>
+                  </div>
+                  {daysPresent.length > 0 && (
+                    <div className="space-y-1.5">
+                      {daysPresent.map(dateStr => {
+                        const day = project.shootingDays[dateStr];
+                        const session = day.sessions?.[child.id];
+                        const vacation = isVacation(child, dateStr);
+                        const period: Period = vacation ? "vacation" : "school";
+                        const maxWork = project.rules.maxWorkMinutes[band][period];
+                        const maxAmp = project.rules.maxAmplitudeMinutes;
+                        const stats = computeSessionStats(session, project.rules);
+                        const workOver = stats ? stats.workMin > maxWork : false;
+                        const ampOver = stats ? stats.amplitudeMin > maxAmp : false;
+                        const ampWarn = stats ? stats.amplitudeMin === maxAmp : false;
+                        const dateLabel = new Date(dateStr + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "short", day: "numeric", month: "short" });
+                        return (
+                          <div key={dateStr} className="flex items-center gap-2 bg-slate-800/50 rounded-lg px-3 py-2 text-[10px]">
+                            <span className="text-slate-400 capitalize w-24 flex-shrink-0">{dateLabel}</span>
+                            {session?.start_time ? (
+                              <>
+                                <span className="text-slate-300 flex-1">{formatTime(session.start_time)}{session.end_time ? ` → ${formatTime(session.end_time)}` : " → en cours"}</span>
+                                {stats && <span className={`font-semibold ${workOver ? "text-red-400" : "text-emerald-400"}`}>Trav. {formatMinutes(stats.workMin)}</span>}
+                                {stats && <span className={ampOver ? "text-red-400" : ampWarn ? "text-orange-400" : "text-slate-400"}>Ampl. {formatMinutes(stats.amplitudeMin)}</span>}
+                              </>
+                            ) : <span className="text-slate-500 flex-1">Non démarré</span>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         <div className="mt-8 text-center text-[10px] text-slate-600">KidsTime · Éléonore Aguillon · ACMA Fiction</div>
       </div>
     </div>
