@@ -888,6 +888,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     onExportProject={() => exportProjectGlobal(activeProject)}
     onExportProjectPDF={() => exportProjectGlobalPDF(activeProject)}
     onExportChildDays={child => exportChildAllDays(activeProject, child)}
+    onDelete={() => { deleteProject(activeProject.id); setView("home"); }}
   /></>;
   if (view === "shooting" && activeProject && activeDate) return <><Fonts /><ShootingView project={activeProject} dateStr={activeDate}
     onBack={() => { setView("project"); refreshActive(); }}
@@ -936,7 +937,7 @@ function HomeView({ projects, userEmail, onCreate, onOpen, onDelete, onSignOut }
             {projects.map(p => (
               <div key={p.id} className="flex items-center gap-3 bg-slate-900/50 border border-slate-700 rounded-xl px-4 py-4 active:bg-slate-800 transition-colors cursor-pointer" onClick={() => onOpen(p.id)}>
                 <div className="flex-1"><div className="font-bold text-white" style={{ fontFamily: "Syne, sans-serif" }}>{p.name}</div><div className="text-xs text-slate-500">{new Date(p.created_at).toLocaleDateString("fr-FR")}</div></div>
-                <button onClick={e => { e.stopPropagation(); if (window.confirm(`Supprimer "${p.name}" ? Cette action est irréversible.`)) onDelete(p.id); }} className="text-slate-600 hover:text-red-400 text-xl w-10 h-10 flex items-center justify-center">✕</button>
+                <span className="text-slate-600 text-xs">→</span>
               </div>
             ))}
           </div>
@@ -955,6 +956,7 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
   onUpdateRules: (fn: (r: Rules) => Rules) => void; onOpenDay: (date: string) => void;
   onExportProject: () => void; onExportProjectPDF: () => void;
   onExportChildDays: (child: Child) => void;
+  onDelete: () => void;
 }) {
   const [tab, setTab] = useState<"calendar" | "children" | "groups" | "settings">("calendar");
   const [childModal, setChildModal] = useState<Child | "new" | null>(null);
@@ -982,7 +984,7 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
         {tab === "calendar" && <CalendarTab project={project} onOpenDay={onOpenDay} />}
         {tab === "children" && <ChildrenTab project={project} onAdd={() => setChildModal("new")} onEdit={c => setChildModal(c)} onRemove={onRemoveChild} onImport={onAddChildren} onArchive={onArchiveChild} onExportChildDays={onExportChildDays} />}
         {tab === "groups" && <GroupsTab project={project} onAdd={() => setGroupModal("new")} onRemove={onRemoveGroup} onUpdateGroup={onUpdateGroup} />}
-        {tab === "settings" && <SettingsTab rules={project.rules} onUpdateRules={onUpdateRules} />}
+        {tab === "settings" && <SettingsTab rules={project.rules} onUpdateRules={onUpdateRules} projectName={project.name} onDelete={onDelete} />}
       </div>
 
       {/* Fix #1: bottom tab bar for mobile */}
@@ -1278,7 +1280,10 @@ function GroupsTab({ project, onAdd, onRemove, onUpdateGroup }: { project: Proje
   );
 }
 
-function SettingsTab({ rules, onUpdateRules }: { rules: Rules; onUpdateRules: (fn: (r: Rules) => Rules) => void }) {
+function SettingsTab({ rules, onUpdateRules, projectName, onDelete }: { rules: Rules; onUpdateRules: (fn: (r: Rules) => Rules) => void; projectName: string; onDelete: () => void }) {
+  const [showDeleteZone, setShowDeleteZone] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState("");
+
   function setRule(path: string, value: string) {
     onUpdateRules(r => { const copy = JSON.parse(JSON.stringify(r)); const keys = path.split("."); let obj: any = copy; for (let i = 0; i < keys.length - 1; i++) obj = obj[keys[i]]; obj[keys[keys.length - 1]] = Number(value); return copy; });
   }
@@ -1316,6 +1321,34 @@ function SettingsTab({ rules, onUpdateRules }: { rules: Rules; onUpdateRules: (f
           ))}</div>
         </div>
       ))}
+
+      {/* Zone de suppression */}
+      <div className="mt-6 border border-red-900/50 rounded-xl p-4 bg-red-950/20">
+        <div className="text-xs font-semibold text-red-400 uppercase tracking-wider mb-2">Zone de danger</div>
+        {!showDeleteZone ? (
+          <button onClick={() => setShowDeleteZone(true)} className="text-xs text-red-400 border border-red-800/60 px-3 py-2 rounded-lg">🗑 Supprimer cette production…</button>
+        ) : (
+          <div className="space-y-3">
+            <div className="text-xs text-red-300">Cette action est <b>irréversible</b>. Tapez le nom exact de la production pour confirmer :</div>
+            <div className="text-xs text-slate-400 font-mono bg-slate-800/60 rounded px-3 py-2 select-all">{projectName}</div>
+            <input
+              type="text"
+              value={deleteConfirm}
+              onChange={e => setDeleteConfirm(e.target.value)}
+              placeholder="Tapez le nom ici…"
+              className="w-full bg-slate-800 border border-red-800 rounded-lg px-3 py-2.5 text-white text-sm focus:outline-none focus:border-red-500"
+            />
+            <div className="flex gap-2">
+              <button onClick={() => { setShowDeleteZone(false); setDeleteConfirm(""); }} className="flex-1 text-xs text-slate-400 border border-slate-700 px-3 py-2 rounded-lg">Annuler</button>
+              <button
+                disabled={deleteConfirm !== projectName}
+                onClick={onDelete}
+                className="flex-1 text-xs bg-red-800 disabled:opacity-30 disabled:cursor-not-allowed text-white px-3 py-2 rounded-lg font-semibold"
+              >Supprimer définitivement</button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
