@@ -739,6 +739,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
   const [isOnline, setIsOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
   const userId = session.user.id;
   const CACHE_KEY = `kidstime_cache_${userId}`;
+  const notifiedRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     const on = () => setIsOnline(true);
@@ -747,6 +748,74 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     window.addEventListener("offline", off);
     return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
   }, []);
+
+  useEffect(() => {
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  useEffect(() => {
+    if (view !== "shooting" || !activeProject || !activeDate) return;
+    const check = () => {
+      const day = activeProject.shootingDays[activeDate];
+      if (!day) return;
+      for (const child of activeProject.children) {
+        const session = day.sessions?.[child.id];
+        if (!session?.start_time || session.status === "done") continue;
+        const vacation = isVacation(child, activeDate);
+        const band = getAgeBand(child.dob);
+        const period: Period = vacation ? "vacation" : "school";
+        const maxWork = activeProject.rules.maxWorkMinutes[band][period];
+        const maxAmp = activeProject.rules.maxAmplitudeMinutes;
+        const stats = computeSessionStats(session, activeProject.rules);
+        if (!stats) continue;
+        const name = `${child.first_name} ${child.last_name}`;
+        if (stats.workMin >= maxWork * 0.8 && stats.workMin < maxWork) {
+          const key = `work-warn-${child.id}-${activeDate}`;
+          if (!notifiedRef.current.has(key)) {
+            notifiedRef.current.add(key);
+            if (Notification.permission === "granted") new Notification("⚠ Temps de travail", { body: `${name} approche du max (${formatMinutes(stats.workMin)} / ${formatMinutes(maxWork)})`, icon: "/favicon.ico" });
+          }
+        }
+        if (stats.workMin >= maxWork) {
+          const key = `work-over-${child.id}-${activeDate}`;
+          if (!notifiedRef.current.has(key)) {
+            notifiedRef.current.add(key);
+            if (Notification.permission === "granted") new Notification("🔴 Dépassement travail", { body: `${name} a dépassé le temps max de travail !`, icon: "/favicon.ico" });
+          }
+        }
+        if (stats.amplitudeMin >= maxAmp * 0.9 && stats.amplitudeMin < maxAmp) {
+          const key = `amp-warn-${child.id}-${activeDate}`;
+          if (!notifiedRef.current.has(key)) {
+            notifiedRef.current.add(key);
+            if (Notification.permission === "granted") new Notification("⚠ Amplitude", { body: `${name} approche de l'amplitude max (${formatMinutes(stats.amplitudeMin)} / ${formatMinutes(maxAmp)})`, icon: "/favicon.ico" });
+          }
+        }
+        if (stats.amplitudeMin >= maxAmp) {
+          const key = `amp-over-${child.id}-${activeDate}`;
+          if (!notifiedRef.current.has(key)) {
+            notifiedRef.current.add(key);
+            if (Notification.permission === "granted") new Notification("🔴 Amplitude dépassée", { body: `${name} a dépassé l'amplitude maximale !`, icon: "/favicon.ico" });
+          }
+        }
+      }
+    };
+    check();
+    const interval = setInterval(check, 60000);
+    return () => clearInterval(interval);
+  }, [view, activeProject, activeDate]);
+
+  async function logAction(dateStr: string, childId: string, action: string) {
+    if (!activeProject) return;
+    await supabase.from("action_logs").insert({
+      project_id: activeProject.id,
+      shooting_day_date: dateStr,
+      child_id: childId,
+      action,
+      performed_by: session.user.email ?? "inconnu",
+    });
+  }
 
   const loadProjects = useCallback(async () => {
     setLoading(true);
@@ -869,15 +938,18 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
   }
   async function startSessionsSequentially(dateStr: string, childIds: string[], timeISO?: string) {
     const day = await getOrCreateDay(dateStr); const sessions = { ...(day.sessions || {}) }; let changed = false;
-    for (const childId of childIds) { if (!sessions[childId]?.start_time) { sessions[childId] = { start_time: timeISO || nowISO(), events: [], status: "working" }; changed = true; } }
+    const started: string[] = [];
+    for (const childId of childIds) { if (!sessions[childId]?.start_time) { sessions[childId] = { start_time: timeISO || nowISO(), events: [], status: "working" }; changed = true; started.push(childId); } }
     if (!changed) return;
     await supabase.from("shooting_days").update({ sessions }).eq("id", day.id); await refreshActive();
+    for (const childId of started) { logAction(dateStr, childId, "Convocation"); }
   }
   async function startSession(dateStr: string, childId: string, timeISO?: string) { await startSessionsSequentially(dateStr, [childId], timeISO); }
-  async function cancelSession(dateStr: string, childId: string) { const day = activeProject!.shootingDays[dateStr]; if (!day) return; const sessions = { ...(day.sessions || {}) }; delete sessions[childId]; await updateDaySessions(dateStr, sessions); }
+  async function cancelSession(dateStr: string, childId: string) { const day = activeProject!.shootingDays[dateStr]; if (!day) return; const sessions = { ...(day.sessions || {}) }; delete sessions[childId]; await updateDaySessions(dateStr, sessions); logAction(dateStr, childId, "Annulation de session"); }
   async function applyEventToChildren(dateStr: string, childIds: string[], eventType: "pause_start" | "pause_end" | "dejeuner_start" | "dejeuner_end", timeISO?: string) {
     const day = activeProject!.shootingDays[dateStr]; if (!day) return;
     const sessions = { ...(day.sessions || {}) };
+    const applied: { childId: string; actualType: SessionEvent["type"] }[] = [];
     for (const childId of childIds) {
       const s = sessions[childId]; if (!s?.start_time || s.status === "done") continue;
       if (eventType === "pause_start" && s.status !== "working") continue;
@@ -889,8 +961,14 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
       const actualType: SessionEvent["type"] = (eventType === "pause_end" && s.status === "dejeuner") ? "dejeuner_end" : eventType;
       const newStatus: Session["status"] = actualType === "pause_start" ? "paused" : actualType === "dejeuner_start" ? "dejeuner" : "working";
       sessions[childId] = { ...s, status: newStatus, events: [...(s.events || []), { type: actualType, time: timeISO || nowISO() }] };
+      applied.push({ childId, actualType });
     }
     await updateDaySessions(dateStr, sessions);
+    for (const { childId, actualType } of applied) {
+      if (actualType === "pause_start") logAction(dateStr, childId, "Pause démarrée");
+      else if (actualType === "pause_end" || actualType === "dejeuner_end") logAction(dateStr, childId, "Reprise");
+      else if (actualType === "dejeuner_start") logAction(dateStr, childId, "Déjeuner démarré");
+    }
   }
   async function cancelLastEvent(dateStr: string, childId: string) {
     const day = activeProject!.shootingDays[dateStr]; if (!day) return;
@@ -900,18 +978,22 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     if (lastEv?.type === "pause_start") status = "paused";
     else if (lastEv?.type === "dejeuner_start") status = "dejeuner";
     sessions[childId] = { ...s, events, status, end_time: undefined }; await updateDaySessions(dateStr, sessions);
+    logAction(dateStr, childId, "Annulation dernier événement");
   }
   async function endSessions(dateStr: string, childIds: string[], timeISO?: string) {
     const day = activeProject!.shootingDays[dateStr]; if (!day) return;
     const sessions = { ...(day.sessions || {}) };
+    const ended: string[] = [];
     for (const childId of childIds) {
       const s = sessions[childId]; if (!s?.start_time || s.status === "done") continue;
       const events = [...(s.events || [])];
       if (s.status === "paused") events.push({ type: "pause_end", time: timeISO || nowISO() });
       else if (s.status === "dejeuner") events.push({ type: "dejeuner_end", time: timeISO || nowISO() });
       sessions[childId] = { ...s, end_time: timeISO || nowISO(), status: "done", events };
+      ended.push(childId);
     }
     await updateDaySessions(dateStr, sessions);
+    for (const childId of ended) { logAction(dateStr, childId, "Fin de journée"); }
   }
   async function reopenSession(dateStr: string, childId: string) { const day = activeProject!.shootingDays[dateStr]; if (!day) return; const sessions = { ...(day.sessions || {}) }; sessions[childId] = { ...sessions[childId], status: "working", end_time: undefined }; await updateDaySessions(dateStr, sessions); }
   async function editEventTime(dateStr: string, childId: string, eventIndex: number, newTimeISO: string) { const day = activeProject!.shootingDays[dateStr]; if (!day) return; const sessions = { ...(day.sessions || {}) }; const s = { ...sessions[childId] }; const events = [...(s.events || [])]; events[eventIndex] = { ...events[eventIndex], time: newTimeISO }; s.events = events; sessions[childId] = s; await updateDaySessions(dateStr, sessions); }
@@ -1042,7 +1124,7 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
         {tab === "calendar" && <CalendarTab project={project} onOpenDay={onOpenDay} />}
         {tab === "children" && <ChildrenTab project={project} onAdd={() => setChildModal("new")} onEdit={c => setChildModal(c)} onRemove={onRemoveChild} onImport={onAddChildren} onArchive={onArchiveChild} onExportChildDays={onExportChildDays} />}
         {tab === "groups" && <GroupsTab project={project} onAdd={() => setGroupModal("new")} onRemove={onRemoveGroup} onUpdateGroup={onUpdateGroup} />}
-        {tab === "settings" && <SettingsTab rules={project.rules} onUpdateRules={onUpdateRules} projectName={project.name} onDelete={onDelete} />}
+        {tab === "settings" && <SettingsTab rules={project.rules} onUpdateRules={onUpdateRules} projectName={project.name} onDelete={onDelete} projectId={project.id} />}
       </div>
 
       {/* Fix #1: bottom tab bar for mobile */}
@@ -1381,9 +1463,23 @@ function GroupsTab({ project, onAdd, onRemove, onUpdateGroup }: { project: Proje
   );
 }
 
-function SettingsTab({ rules, onUpdateRules, projectName, onDelete }: { rules: Rules; onUpdateRules: (fn: (r: Rules) => Rules) => void; projectName: string; onDelete: () => void }) {
+function SettingsTab({ rules, onUpdateRules, projectName, onDelete, projectId }: { rules: Rules; onUpdateRules: (fn: (r: Rules) => Rules) => void; projectName: string; onDelete: () => void; projectId: string }) {
   const [showDeleteZone, setShowDeleteZone] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState("");
+  const [logs, setLogs] = useState<any[]>([]);
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [logsPage, setLogsPage] = useState(0);
+  const PAGE_SIZE = 20;
+
+  useEffect(() => {
+    setLogsLoading(true);
+    supabase.from("action_logs")
+      .select("*, children(first_name, last_name)")
+      .eq("project_id", projectId)
+      .order("performed_at", { ascending: false })
+      .range(logsPage * PAGE_SIZE, (logsPage + 1) * PAGE_SIZE - 1)
+      .then(({ data }) => { setLogs(data || []); setLogsLoading(false); });
+  }, [projectId, logsPage]);
 
   const BL: Record<AgeBand, string> = { "0-2": "< 3 ans", "3-5": "3–5 ans", "6-11": "6–11 ans", "12-16": "12–16 ans" };
   return (
@@ -1445,6 +1541,38 @@ function SettingsTab({ rules, onUpdateRules, projectName, onDelete }: { rules: R
                 className="flex-1 text-xs bg-red-800 disabled:opacity-30 disabled:cursor-not-allowed text-white px-3 py-2 rounded-lg font-semibold"
               >Supprimer définitivement</button>
             </div>
+          </div>
+        )}
+      </div>
+
+      {/* Historique des actions */}
+      <div className="mt-6 border border-slate-700/60 rounded-xl p-4 bg-slate-900/30">
+        <div className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-3">📋 Historique des actions</div>
+        {logsLoading ? (
+          <div className="text-xs text-slate-500 py-4 text-center">Chargement…</div>
+        ) : logs.length === 0 ? (
+          <div className="text-xs text-slate-500 py-4 text-center">Aucune action enregistrée</div>
+        ) : (
+          <div className="space-y-1 max-h-80 overflow-y-auto">
+            {logs.map((log, i) => {
+              const d = new Date(log.performed_at);
+              const dateLabel = `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+              const childName = log.children ? `${log.children.first_name} ${log.children.last_name}` : log.child_id;
+              return (
+                <div key={i} className="flex items-center gap-2 text-[10px] text-slate-400 py-1 border-b border-slate-800/60 last:border-0">
+                  <span className="text-slate-500 flex-shrink-0 w-20">{dateLabel}</span>
+                  <span className="text-slate-300 flex-1 truncate font-semibold">{childName}</span>
+                  <span className="flex-shrink-0">{log.action}</span>
+                  <span className="text-slate-600 flex-shrink-0 truncate max-w-[80px]">{log.performed_by}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {(logsPage > 0 || logs.length === PAGE_SIZE) && (
+          <div className="flex gap-2 mt-3">
+            {logsPage > 0 && <button onClick={() => setLogsPage(p => p - 1)} className="text-xs text-slate-400 border border-slate-700 px-3 py-1.5 rounded-lg">← Page précédente</button>}
+            {logs.length === PAGE_SIZE && <button onClick={() => setLogsPage(p => p + 1)} className="text-xs text-slate-400 border border-slate-700 px-3 py-1.5 rounded-lg ml-auto">Page suivante →</button>}
           </div>
         )}
       </div>
