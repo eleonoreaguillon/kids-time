@@ -1444,6 +1444,7 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
 }) {
   const [, setTick] = useState(0);
   const [addingChildren, setAdding] = useState(false);
+  const [pendingRemove, setPendingRemove] = useState<Child | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [actionModal, setActionModal] = useState<{ type: "start" | "pause" | "dejeuner" | "resume" | "end" } | null>(null);
   const [search, setSearch] = useState("");
@@ -1539,13 +1540,22 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
                 </div>
               )}
               <div className="text-[10px] text-slate-400 uppercase tracking-wider mb-2">Individuellement</div>
-              <div className="space-y-0.5">{project.children.filter(c => !c.archived).map(c => (
-                <label key={c.id} className="flex items-center gap-3 py-2.5 cursor-pointer">
-                  <input type="checkbox" className="accent-blue-500 w-5 h-5" checked={childIds.includes(c.id)} onChange={() => onToggleChild(c.id)} />
-                  <span className="text-sm text-slate-200 flex-1">{c.first_name} {c.last_name}</span>
-                  {c.role && <RoleBadge role={c.role} />}
-                </label>
-              ))}</div>
+              <div className="space-y-0.5">{project.children.filter(c => !c.archived).map(c => {
+                const isInDay = childIds.includes(c.id);
+                const hasSession = isInDay && !!sessions[c.id]?.start_time;
+                return (
+                  <label key={c.id} className="flex items-center gap-3 py-2.5 cursor-pointer">
+                    <input type="checkbox" className="accent-blue-500 w-5 h-5" checked={isInDay}
+                      onChange={() => {
+                        if (isInDay && hasSession) { setPendingRemove(c); }
+                        else { onToggleChild(c.id); }
+                      }} />
+                    <span className="text-sm text-slate-200 flex-1">{c.first_name} {c.last_name}</span>
+                    {c.role && <RoleBadge role={c.role} />}
+                    {hasSession && <span className="text-[10px] text-amber-400">● données</span>}
+                  </label>
+                );
+              })}</div>
             </div>
           )}
         </div>
