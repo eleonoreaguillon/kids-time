@@ -137,7 +137,7 @@ function formatTime(v: string | Date | undefined): string {
 function isVacation(child: Child, dateStr: string): boolean {
   return (child.vacation_periods || []).some(p => dateStr >= p.start && dateStr <= p.end);
 }
-function todayStr(): string { return new Date().toISOString().slice(0, 10); }
+function todayStr(): string { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
 const ROLE_ORDER: Record<string, number> = { role: 0, silhouette: 1, figurant: 2 };
 function sortByRoleThenAlpha(cs: Child[]): Child[] {
   return [...cs].sort((a, b) => {
@@ -867,6 +867,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     setActiveProject(f);
     const today = todayStr();
     const todayDay = f.shootingDays?.[today];
+    console.log("[KidsTime] today=", today, "shootingDays keys=", Object.keys(f.shootingDays || {}), "todayDay=", todayDay);
     if (todayDay && (todayDay.child_ids || []).length > 0) { setActiveDate(today); setView("shooting"); }
     else setView("project");
     setLoading(false);
