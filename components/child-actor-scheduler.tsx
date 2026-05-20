@@ -867,8 +867,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     setActiveProject(f);
     const today = todayStr();
     const todayDay = f.shootingDays?.[today];
-    console.log("[KidsTime] today=", today, "shootingDays keys=", Object.keys(f.shootingDays || {}), "todayDay=", todayDay);
-    if (todayDay && (todayDay.child_ids || []).length > 0) { setActiveDate(today); setView("shooting"); }
+if (todayDay && (todayDay.child_ids || []).length > 0) { setActiveDate(today); setView("shooting"); }
     else setView("project");
     setLoading(false);
   }
