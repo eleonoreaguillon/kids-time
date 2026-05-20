@@ -1057,6 +1057,7 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
 
       {childModal !== null && (
         <ChildFormModal child={childModal === "new" ? null : childModal}
+          shootingDays={project.shootingDays}
           onSave={data => { childModal === "new" ? onAddChild(data) : onUpdateChild((childModal as Child).id, data); setChildModal(null); }}
           onClose={() => setChildModal(null)} />
       )}
@@ -1115,6 +1116,8 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
   const [importPreview, setImportPreview] = useState<any[]>([]);
   const [showPreview, setShowPreview] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [duplicates, setDuplicates] = useState<any[]>([]);
+  const [showDuplicateWarning, setShowDuplicateWarning] = useState(false);
   const [roleTab, setRoleTab] = useState<ChildRole | "all">("all");
   const [showArchived, setShowArchived] = useState(false);
   const [search, setSearch] = useState("");
@@ -1177,11 +1180,37 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
     e.target.value = "";
   }
 
-  async function confirmImport() {
+  function detectDuplicates(preview: any[]): any[] {
+    return preview.filter(c =>
+      project.children.some(existing =>
+        normalize(existing.first_name) === normalize(c.firstName) &&
+        normalize(existing.last_name) === normalize(c.lastName) &&
+        existing.dob === c.dob
+      )
+    );
+  }
+
+  function handleConfirmImportClick() {
+    const dupes = detectDuplicates(importPreview);
+    if (dupes.length > 0) {
+      setDuplicates(dupes);
+      setShowDuplicateWarning(true);
+    } else {
+      doImport(importPreview);
+    }
+  }
+
+  async function doImport(children: any[]) {
+    setShowDuplicateWarning(false);
+    setDuplicates([]);
     setImporting(true);
-    try { await onImport(importPreview); setShowPreview(false); setImportPreview([]); setImportMsg(`✅ ${importPreview.length} enfant(s) importé(s) !`); }
+    try { await onImport(children); setShowPreview(false); setImportPreview([]); setImportMsg(`✅ ${children.length} enfant(s) importé(s) !`); }
     catch { setImportMsg("❌ Erreur lors de l'import."); }
     setImporting(false);
+  }
+
+  async function confirmImport() {
+    handleConfirmImportClick();
   }
 
   return (
@@ -1218,10 +1247,24 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
             <div className="space-y-1 max-h-40 overflow-y-auto mb-2">
               {importPreview.map((c, i) => <div key={i} className="text-xs flex gap-2 items-center flex-wrap"><span className="text-white font-semibold">{c.firstName} {c.lastName}</span><span className="text-slate-500">{c.dob}</span>{c.role && <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${ROLE_COLORS[c.role as ChildRole]}`}>{ROLE_LABELS[c.role as ChildRole]}</span>}</div>)}
             </div>
-            <div className="flex gap-2">
-              <button onClick={() => { setShowPreview(false); setImportMsg(""); }} className="text-xs text-slate-400">Annuler</button>
-              <button onClick={confirmImport} disabled={importing} className="flex-1 text-xs bg-blue-600 text-white py-2 rounded-lg disabled:opacity-50">{importing ? "Import…" : `Confirmer (${importPreview.length})`}</button>
-            </div>
+            {showDuplicateWarning && duplicates.length > 0 && (
+              <div className="mb-3 bg-amber-900/30 border border-amber-600/60 rounded-xl p-3">
+                <div className="text-xs font-semibold text-amber-300 mb-1">⚠ {duplicates.length} doublon(s) détecté(s) :</div>
+                <div className="space-y-0.5 max-h-24 overflow-y-auto mb-3">
+                  {duplicates.map((c, i) => <div key={i} className="text-xs text-amber-200">{c.firstName} {c.lastName} · {c.dob}</div>)}
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => { setShowDuplicateWarning(false); setDuplicates([]); }} className="flex-1 text-xs text-slate-300 border border-slate-600 py-2 rounded-lg">Annuler</button>
+                  <button onClick={() => doImport(importPreview)} disabled={importing} className="flex-1 text-xs bg-amber-700 text-white py-2 rounded-lg disabled:opacity-50">{importing ? "Import…" : "Importer quand même"}</button>
+                </div>
+              </div>
+            )}
+            {!showDuplicateWarning && (
+              <div className="flex gap-2">
+                <button onClick={() => { setShowPreview(false); setImportMsg(""); }} className="text-xs text-slate-400">Annuler</button>
+                <button onClick={confirmImport} disabled={importing} className="flex-1 text-xs bg-blue-600 text-white py-2 rounded-lg disabled:opacity-50">{importing ? "Import…" : `Confirmer (${importPreview.length})`}</button>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1342,20 +1385,19 @@ function SettingsTab({ rules, onUpdateRules, projectName, onDelete }: { rules: R
   const [showDeleteZone, setShowDeleteZone] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState("");
 
-  function setRule(path: string, value: string) {
-    onUpdateRules(r => { const copy = JSON.parse(JSON.stringify(r)); const keys = path.split("."); let obj: any = copy; for (let i = 0; i < keys.length - 1; i++) obj = obj[keys[i]]; obj[keys[keys.length - 1]] = Number(value); return copy; });
-  }
   const BL: Record<AgeBand, string> = { "0-2": "< 3 ans", "3-5": "3–5 ans", "6-11": "6–11 ans", "12-16": "12–16 ans" };
   return (
     <div className="space-y-4">
       <h2 className="font-bold text-base mb-1" style={{ fontFamily: "Syne, sans-serif" }}>Paramètres DRIEETS</h2>
+      <div className="bg-blue-900/20 border border-blue-700/50 rounded-xl px-3 py-2 text-xs text-blue-300">
+        Ces paramètres sont définis par la réglementation DRIEETS et ne peuvent pas être modifiés.
+      </div>
       <div className="space-y-2">
-        {([["Amplitude max", "maxAmplitudeMinutes", 60, 720, 30], ["Pause minimum", "minBreakMinutes", 5, 60, 1], ["Repos entre journées", "minRestBetweenDays", 480, 1440, 30]] as const).map(([label, key, min, max, step]) => (
+        {([["Amplitude max", "maxAmplitudeMinutes"], ["Pause minimum", "minBreakMinutes"], ["Repos entre journées", "minRestBetweenDays"]] as const).map(([label, key]) => (
           <div key={key} className="bg-slate-900/50 border border-slate-700 rounded-xl p-3 flex items-center justify-between">
             <div className="text-sm text-white">{label}</div>
-            <div className="flex items-center gap-2">
-              <input type="number" min={min} max={max} step={step} value={(rules as any)[key]} onChange={e => setRule(key, e.target.value)} className="w-20 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-white text-sm text-center" />
-              <span className="text-xs text-slate-400 w-12">{formatMinutes((rules as any)[key])}</span>
+            <div className="bg-slate-800/80 border border-slate-600 rounded-lg px-3 py-1.5 text-slate-300 text-sm font-mono">
+              {formatMinutes((rules as any)[key])}
             </div>
           </div>
         ))}
@@ -1368,10 +1410,9 @@ function SettingsTab({ rules, onUpdateRules, projectName, onDelete }: { rules: R
               <div className="font-semibold text-white text-xs mb-2">{BL[band]}</div>
               <div className="grid grid-cols-2 gap-3">{(["school", "vacation"] as const).map(p => (
                 <div key={p}>
-                  <label className="text-[10px] text-slate-400 block mb-1">{p === "school" ? "🏫 Scolaire" : "🌴 Vacances"}</label>
-                  <div className="flex items-center gap-1">
-                    <input type="number" min="15" max="720" step="15" value={rules[rk][band][p]} onChange={e => setRule(`${rk}.${band}.${p}`, e.target.value)} className="w-16 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-white text-xs text-center" />
-                    <span className="text-[10px] text-slate-500">{formatMinutes(rules[rk][band][p])}</span>
+                  <div className="text-[10px] text-slate-400 block mb-1">{p === "school" ? "🏫 Scolaire" : "🌴 Vacances"}</div>
+                  <div className="bg-slate-800/80 border border-slate-600 rounded-lg px-2 py-1.5 text-slate-300 text-xs font-mono text-center">
+                    {formatMinutes(rules[rk][band][p])}
                   </div>
                 </div>
               ))}</div>
@@ -1411,12 +1452,13 @@ function SettingsTab({ rules, onUpdateRules, projectName, onDelete }: { rules: R
   );
 }
 
-function ChildFormModal({ child, onSave, onClose }: { child: Child | null; onSave: (d: any) => void; onClose: () => void }) {
+function ChildFormModal({ child, shootingDays, onSave, onClose }: { child: Child | null; shootingDays: Record<string, ShootingDay>; onSave: (d: any) => void; onClose: () => void }) {
   const [fullName, setFullName] = useState(child ? `${child.first_name} ${child.last_name}`.trim() : "");
   const [dob, setDob] = useState(child?.dob || "");
   const [vacationPeriods, setVacationPeriods] = useState<VacationPeriod[]>(child?.vacation_periods || []);
   const [role, setRole] = useState<ChildRole | null>(child?.role || null);
   const [newVac, setNewVac] = useState({ start: "", end: "" });
+  const [vacWarnings, setVacWarnings] = useState<Record<number, string[]>>({});
   const [derogations, setDerogations] = useState<Derogation[]>(child?.derogations || []);
   const [newDerog, setNewDerog] = useState({ date: "", end_time: "" });
   const [error, setError] = useState("");
@@ -1442,11 +1484,42 @@ function ChildFormModal({ child, onSave, onClose }: { child: Child | null; onSav
         </div>
         <div>
           <label className="text-[10px] text-slate-400 uppercase tracking-wider block mb-2">Vacances <span className="text-slate-600 font-normal normal-case">(optionnel)</span></label>
-          {vacationPeriods.map((p, i) => <div key={i} className="flex items-center gap-2 mb-1 text-sm text-slate-300"><span>{p.start} → {p.end}</span><button onClick={() => setVacationPeriods(v => v.filter((_, j) => j !== i))} className="text-red-400 w-6 h-6 flex items-center justify-center">✕</button></div>)}
+          {vacationPeriods.map((p, i) => (
+            <div key={i} className="mb-2">
+              <div className="flex items-center gap-2 text-sm text-slate-300">
+                <span>{p.start} → {p.end}</span>
+                <button onClick={() => {
+                  setVacationPeriods(v => v.filter((_, j) => j !== i));
+                  setVacWarnings(w => { const copy = { ...w }; delete copy[i]; return copy; });
+                }} className="text-red-400 w-6 h-6 flex items-center justify-center">✕</button>
+              </div>
+              {vacWarnings[i] && vacWarnings[i].length > 0 && (
+                <div className="mt-1 bg-amber-900/25 border border-amber-700/50 rounded-lg px-2 py-1.5 text-[10px] text-amber-300">
+                  ⚠ {vacWarnings[i].length} jour(s) de tournage tombent dans cette période de vacances : {vacWarnings[i].join(", ")}
+                </div>
+              )}
+            </div>
+          ))}
           <div className="flex gap-2 items-end mt-2">
             <TextInput label="Début" type="date" value={newVac.start} onChange={e => setNewVac(v => ({ ...v, start: e.target.value }))} />
             <TextInput label="Fin" type="date" value={newVac.end} onChange={e => setNewVac(v => ({ ...v, end: e.target.value }))} />
-            <button onClick={() => { if (newVac.start && newVac.end) { setVacationPeriods(v => [...v, newVac]); setNewVac({ start: "", end: "" }); } }} className="bg-slate-700 text-white px-3 rounded-lg h-12 text-sm">+</button>
+            <button onClick={() => {
+              if (newVac.start && newVac.end) {
+                const idx = vacationPeriods.length;
+                const conflictDates = Object.entries(shootingDays)
+                  .filter(([date, day]) => {
+                    if (date < newVac.start || date > newVac.end) return false;
+                    if (child && !day.child_ids.includes(child.id)) return false;
+                    return true;
+                  })
+                  .map(([date]) => new Date(date + "T12:00:00").toLocaleDateString("fr-FR", { day: "numeric", month: "short" }));
+                setVacationPeriods(v => [...v, newVac]);
+                if (conflictDates.length > 0) {
+                  setVacWarnings(w => ({ ...w, [idx]: conflictDates }));
+                }
+                setNewVac({ start: "", end: "" });
+              }
+            }} className="bg-slate-700 text-white px-3 rounded-lg h-12 text-sm">+</button>
           </div>
         </div>
         {/* Dérogations horaires (travail après 20h) */}
