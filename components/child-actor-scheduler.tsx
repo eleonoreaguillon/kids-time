@@ -69,6 +69,7 @@ interface Project {
   children: Child[];
   groups: Group[];
   shootingDays: Record<string, ShootingDay>;
+  share_token?: string;
 }
 
 interface SessionStats {
@@ -664,11 +665,16 @@ function Btn({ children, variant = "primary", className = "", ...props }: { chil
 // ─── Root ─────────────────────────────────────────────────────────────────────
 export default function App() {
   const [session, setSession] = useState<any>(undefined);
+  const shareToken = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("share") : null;
+
   useEffect(() => {
+    if (shareToken) return;
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_ev, s) => setSession(s));
     return () => subscription.unsubscribe();
-  }, []);
+  }, [shareToken]);
+
+  if (shareToken) return <SharedProjectView token={shareToken} />;
   if (session === undefined) return <div className="min-h-screen bg-[#080d16] flex items-center justify-center"><div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" /></div>;
   if (!session) return <AuthPage onAuth={setSession} />;
   return <MainApp session={session} onSignOut={() => supabase.auth.signOut()} />;
@@ -721,13 +727,30 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [activeDate, setActiveDate] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isOnline, setIsOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
   const userId = session.user.id;
+  const CACHE_KEY = `kidstime_cache_${userId}`;
+
+  useEffect(() => {
+    const on = () => setIsOnline(true);
+    const off = () => setIsOnline(false);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
+    return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
+  }, []);
 
   const loadProjects = useCallback(async () => {
     setLoading(true);
+    if (!navigator.onLine) {
+      try { const cached = localStorage.getItem(CACHE_KEY); if (cached) setProjects(JSON.parse(cached)); } catch {}
+      setLoading(false); return;
+    }
     const { data } = await supabase.from("projects").select("*").eq("user_id", userId).order("created_at");
-    setProjects((data || []) as Project[]); setLoading(false);
-  }, [userId]);
+    const list = (data || []) as Project[];
+    setProjects(list);
+    try { localStorage.setItem(CACHE_KEY, JSON.stringify(list)); } catch {}
+    setLoading(false);
+  }, [userId, CACHE_KEY]);
 
   useEffect(() => { loadProjects(); }, [loadProjects]);
 
@@ -741,10 +764,21 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     const shootingDays: Record<string, ShootingDay> = {};
     (days || []).forEach((d: ShootingDay) => { shootingDays[d.date] = d; });
     const mappedChildren = (children || []).map((c: any) => ({ ...c, role: c.child_role ?? undefined }));
-    return { ...proj, children: mappedChildren, groups: groups || [], shootingDays };
+    const full = { ...proj, children: mappedChildren, groups: groups || [], shootingDays };
+    try { localStorage.setItem(`kidstime_project_${id}`, JSON.stringify(full)); } catch {}
+    return full;
   }
 
-  async function openProject(id: string) { setLoading(true); const f = await loadFullProject(id); setActiveProject(f); setView("project"); setLoading(false); }
+  async function openProject(id: string) {
+    setLoading(true);
+    if (!navigator.onLine) {
+      try {
+        const cached = localStorage.getItem(`kidstime_project_${id}`);
+        if (cached) { setActiveProject(JSON.parse(cached)); setView("project"); setLoading(false); return; }
+      } catch {}
+    }
+    const f = await loadFullProject(id); setActiveProject(f); setView("project"); setLoading(false);
+  }
 
   async function refreshActive() {
     if (!activeProject?.id) return;
@@ -875,10 +909,17 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
   async function editStartTime(dateStr: string, childId: string, newTimeISO: string) { const day = activeProject!.shootingDays[dateStr]; if (!day) return; const sessions = { ...(day.sessions || {}) }; sessions[childId] = { ...sessions[childId], start_time: newTimeISO }; await updateDaySessions(dateStr, sessions); }
   async function editEndTime(dateStr: string, childId: string, newTimeISO: string) { const day = activeProject!.shootingDays[dateStr]; if (!day) return; const sessions = { ...(day.sessions || {}) }; sessions[childId] = { ...sessions[childId], end_time: newTimeISO }; await updateDaySessions(dateStr, sessions); }
 
+  async function generateShareToken(projectId: string): Promise<string> {
+    const token = crypto.randomUUID();
+    await supabase.from("projects").update({ share_token: token }).eq("id", projectId);
+    await refreshActive();
+    return token;
+  }
+
   const Fonts = () => <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@700;800&display=swap" rel="stylesheet" />;
   if (loading && view === "home") return <div className="min-h-screen bg-[#080d16] flex items-center justify-center"><Fonts /><div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" /></div>;
 
-  if (view === "home") return <><Fonts /><HomeView projects={projects} userEmail={session.user.email} onCreate={createProject} onOpen={openProject} onDelete={deleteProject} onSignOut={onSignOut} /></>;
+  if (view === "home") return <><Fonts /><HomeView projects={projects} userEmail={session.user.email} onCreate={createProject} onOpen={openProject} onDelete={deleteProject} onSignOut={onSignOut} isOnline={isOnline} /></>;
   if (view === "project" && activeProject) return <><Fonts /><ProjectView project={activeProject}
     onBack={() => { setView("home"); loadProjects(); }}
     onAddChild={addChild} onAddChildren={addChildren} onUpdateChild={updateChild} onRemoveChild={removeChild}
@@ -889,6 +930,8 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     onExportProjectPDF={() => exportProjectGlobalPDF(activeProject)}
     onExportChildDays={child => exportChildAllDays(activeProject, child)}
     onDelete={() => { deleteProject(activeProject.id); setView("home"); }}
+    onGenerateShareToken={() => generateShareToken(activeProject.id)}
+    isOnline={isOnline}
   /></>;
   if (view === "shooting" && activeProject && activeDate) return <><Fonts /><ShootingView project={activeProject} dateStr={activeDate}
     onBack={() => { setView("project"); refreshActive(); }}
@@ -910,10 +953,11 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
   return null;
 }
 
-function HomeView({ projects, userEmail, onCreate, onOpen, onDelete, onSignOut }: { projects: Project[]; userEmail: string; onCreate: (n: string) => void; onOpen: (id: string) => void; onDelete: (id: string) => void; onSignOut: () => void }) {
+function HomeView({ projects, userEmail, onCreate, onOpen, onDelete, onSignOut, isOnline }: { projects: Project[]; userEmail: string; onCreate: (n: string) => void; onOpen: (id: string) => void; onDelete: (id: string) => void; onSignOut: () => void; isOnline: boolean }) {
   const [name, setName] = useState("");
   return (
     <div className="min-h-screen bg-[#080d16] text-white" style={{ fontFamily: "'DM Mono', monospace" }}>
+      {!isOnline && <OfflineBanner />}
       <div className="fixed inset-0 opacity-[0.025]" style={{ backgroundImage: "linear-gradient(#fff 1px,transparent 1px),linear-gradient(90deg,#fff 1px,transparent 1px)", backgroundSize: "40px 40px" }} />
       {/* Fix #1: safe area padding for iPhone notch */}
       <div className="relative max-w-2xl mx-auto px-4 pt-safe-top py-10">
@@ -947,7 +991,7 @@ function HomeView({ projects, userEmail, onCreate, onOpen, onDelete, onSignOut }
   );
 }
 
-function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild, onRemoveChild, onArchiveChild, onAddGroup, onUpdateGroup, onRemoveGroup, onUpdateRules, onOpenDay, onExportProject, onExportProjectPDF, onExportChildDays, onDelete }: {
+function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild, onRemoveChild, onArchiveChild, onAddGroup, onUpdateGroup, onRemoveGroup, onUpdateRules, onOpenDay, onExportProject, onExportProjectPDF, onExportChildDays, onDelete, onGenerateShareToken, isOnline }: {
   project: Project; onBack: () => void;
   onAddChild: (c: any) => void; onAddChildren: (cs: any[]) => Promise<void>;
   onUpdateChild: (id: string, d: any) => void; onRemoveChild: (id: string) => void;
@@ -957,20 +1001,25 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
   onExportProject: () => void; onExportProjectPDF: () => void;
   onExportChildDays: (child: Child) => void;
   onDelete: () => void;
+  onGenerateShareToken: () => Promise<string>;
+  isOnline: boolean;
 }) {
   const [tab, setTab] = useState<"calendar" | "children" | "groups" | "settings">("calendar");
   const [childModal, setChildModal] = useState<Child | "new" | null>(null);
   const [groupModal, setGroupModal] = useState<Group | "new" | null>(null);
+  const [shareModal, setShareModal] = useState(false);
   const tabs = [{ id: "calendar", label: "📅" }, { id: "children", label: "👦" }, { id: "groups", label: "👥" }, { id: "settings", label: "⚙️" }];
   const tabLabels: Record<string, string> = { calendar: "Calendrier", children: "Enfants", groups: "Groupes", settings: "Paramètres" };
   return (
     <div className="min-h-screen bg-[#080d16] text-white pb-20" style={{ fontFamily: "'DM Mono', monospace" }}>
+      {!isOnline && <OfflineBanner />}
       {/* Fix #1: sticky header with safe area */}
       <div className="sticky top-0 z-10 bg-[#080d16] border-b border-slate-800 px-4 py-3 flex items-center gap-3">
         <button onClick={onBack} className="text-slate-400 hover:text-white text-sm w-8 h-8 flex items-center justify-center rounded-lg border border-slate-700">←</button>
         <h1 className="text-base font-extrabold truncate flex-1" style={{ fontFamily: "Syne, sans-serif" }}>{project.name}</h1>
-        <div className="text-[10px] text-slate-500">{project.children.length} enfant(s)</div>
+        <button onClick={() => setShareModal(true)} className="text-slate-400 hover:text-blue-400 text-xs border border-slate-700 px-3 py-1.5 rounded-lg">🔗 Partager</button>
       </div>
+      {shareModal && <ShareModal project={project} onGenerateToken={onGenerateShareToken} onClose={() => setShareModal(false)} />}
 
       {/* Fix #5/#6: project export buttons */}
       {tab === "calendar" && (
@@ -1833,6 +1882,149 @@ function TimelineRow({ label, iso, isEditing, editTime, onEdit, onTimeChange, on
       ) : (
         <button onClick={onEdit} className="text-blue-300 hover:underline">{formatTime(iso)}</button>
       )}
+    </div>
+  );
+}
+
+// ─── Offline banner ────────────────────────────────────────────────────────────
+function OfflineBanner() {
+  return (
+    <div className="bg-amber-900/80 border-b border-amber-700 px-4 py-2 flex items-center gap-2 text-amber-200 text-xs">
+      <span>📡</span>
+      <span>Mode hors-ligne — données en lecture seule. Les modifications reprendront dès le retour du réseau.</span>
+    </div>
+  );
+}
+
+// ─── Share modal ───────────────────────────────────────────────────────────────
+function ShareModal({ project, onGenerateToken, onClose }: { project: Project; onGenerateToken: () => Promise<string>; onClose: () => void }) {
+  const [token, setToken] = useState(project.share_token || "");
+  const [loading, setLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const shareUrl = token ? `${window.location.origin}?share=${token}` : "";
+
+  async function generate() {
+    setLoading(true);
+    const t = await onGenerateToken();
+    setToken(t);
+    setLoading(false);
+  }
+
+  function copyLink() {
+    navigator.clipboard.writeText(shareUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  return (
+    <Modal title="Partager en lecture seule" onClose={onClose}>
+      <div className="space-y-4">
+        <div className="text-xs text-slate-400">
+          Générez un lien pour partager ce projet en <b className="text-white">lecture seule</b> avec un réalisateur ou directeur de production. Aucun compte requis.
+        </div>
+        {!token ? (
+          <button onClick={generate} disabled={loading} className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white py-3 rounded-xl font-bold text-sm">
+            {loading ? "Génération…" : "🔗 Générer le lien de partage"}
+          </button>
+        ) : (
+          <div className="space-y-3">
+            <div className="bg-slate-800/80 border border-slate-600 rounded-lg px-3 py-2 text-xs text-blue-300 break-all font-mono">{shareUrl}</div>
+            <button onClick={copyLink} className={`w-full py-3 rounded-xl font-bold text-sm transition-colors ${copied ? "bg-emerald-700 text-white" : "bg-slate-700 hover:bg-slate-600 text-white"}`}>
+              {copied ? "✓ Lien copié !" : "📋 Copier le lien"}
+            </button>
+            <div className="text-[10px] text-slate-500 text-center">Ce lien donne accès à toutes les données du projet en lecture seule.</div>
+          </div>
+        )}
+        <Btn variant="ghost" className="w-full" onClick={onClose}>Fermer</Btn>
+      </div>
+    </Modal>
+  );
+}
+
+// ─── Shared project view (read-only, no auth required) ────────────────────────
+function SharedProjectView({ token }: { token: string }) {
+  const [project, setProject] = useState<Project | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    supabase.rpc("get_project_by_token", { p_token: token }).then(({ data, error: e }) => {
+      if (e || !data) { setError("Lien invalide ou expiré."); setLoading(false); return; }
+      const shootingDays: Record<string, ShootingDay> = {};
+      Object.entries(data.shootingDays || {}).forEach(([date, d]: [string, any]) => { shootingDays[date] = d; });
+      const mappedChildren = (data.children || []).map((c: any) => ({ ...c, role: c.child_role ?? undefined }));
+      setProject({ ...data.project, children: mappedChildren, groups: data.groups || [], shootingDays });
+      setLoading(false);
+    });
+  }, [token]);
+
+  if (loading) return <div className="min-h-screen bg-[#080d16] flex items-center justify-center"><div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" /></div>;
+  if (error || !project) return (
+    <div className="min-h-screen bg-[#080d16] flex items-center justify-center px-4" style={{ fontFamily: "'DM Mono', monospace" }}>
+      <div className="text-center"><div className="text-red-400 text-4xl mb-4">⚠️</div><div className="text-white font-bold mb-2">{error || "Erreur"}</div><div className="text-slate-400 text-sm">Ce lien de partage est invalide ou a expiré.</div></div>
+    </div>
+  );
+  return <ReadOnlyView project={project} />;
+}
+
+// ─── Read-only view ───────────────────────────────────────────────────────────
+function ReadOnlyView({ project }: { project: Project }) {
+  const sortedDates = Object.keys(project.shootingDays).sort();
+  return (
+    <div className="min-h-screen bg-[#080d16] text-white pb-10" style={{ fontFamily: "'DM Mono', monospace" }}>
+      <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@700;800&display=swap" rel="stylesheet" />
+      <div className="bg-blue-900/30 border-b border-blue-800 px-4 py-2 flex items-center gap-2 text-blue-300 text-xs">
+        <span>👁</span><span>Mode consultation — lecture seule · KidsTime · ACMA Fiction</span>
+      </div>
+      <div className="max-w-2xl mx-auto px-4 py-6">
+        <h1 className="text-2xl font-extrabold mb-1" style={{ fontFamily: "Syne, sans-serif" }}><span className="text-white">KIDS</span><span className="text-blue-500">TIME</span></h1>
+        <h2 className="text-lg font-bold text-white mb-1">{project.name}</h2>
+        <div className="text-xs text-slate-400 mb-6">{project.children.length} enfant(s) · {sortedDates.length} jour(s) de tournage</div>
+
+        <div className="space-y-4">
+          {sortedDates.map(dateStr => {
+            const day = project.shootingDays[dateStr];
+            const dateLabel = new Date(dateStr + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
+            const childrenInDay = (day.child_ids || []).map(id => project.children.find(c => c.id === id)).filter(Boolean) as Child[];
+            if (childrenInDay.length === 0) return null;
+            return (
+              <div key={dateStr} className="bg-slate-900/50 border border-slate-700 rounded-xl p-4">
+                <div className="font-bold text-white text-sm mb-3 capitalize">{dateLabel}</div>
+                <div className="space-y-2">
+                  {childrenInDay.map(child => {
+                    const session = day.sessions?.[child.id];
+                    const vacation = isVacation(child, dateStr);
+                    const band = getAgeBand(child.dob);
+                    const period: Period = vacation ? "vacation" : "school";
+                    const maxWork = project.rules.maxWorkMinutes[band][period];
+                    const maxAmp = project.rules.maxAmplitudeMinutes;
+                    const stats = computeSessionStats(session, project.rules);
+                    const workOver = stats ? stats.workMin > maxWork : false;
+                    const ampOver = stats ? stats.amplitudeMin > maxAmp : false;
+                    return (
+                      <div key={child.id} className="flex items-center gap-3 bg-slate-800/50 rounded-lg px-3 py-2.5">
+                        <div className="w-7 h-7 rounded-full bg-blue-900/60 flex items-center justify-center text-blue-300 font-bold text-[10px] flex-shrink-0">{child.first_name?.[0]}{child.last_name?.[0]}</div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-semibold text-white truncate">{child.first_name} {child.last_name}</div>
+                          <div className="text-[10px] text-slate-400">{getAge(child.dob)} ans{vacation ? " · 🌴 Vac." : ""}</div>
+                        </div>
+                        {session?.start_time ? (
+                          <div className="text-right text-[10px] space-y-0.5 flex-shrink-0">
+                            <div className="text-slate-300">{formatTime(session.start_time)}{session.end_time ? ` → ${formatTime(session.end_time)}` : " → en cours"}</div>
+                            {stats && <div className={`font-semibold ${workOver ? "text-red-400" : "text-emerald-400"}`}>Trav. {formatMinutes(stats.workMin)}</div>}
+                            {stats && <div className={`${ampOver ? "text-red-400" : "text-slate-400"}`}>Ampl. {formatMinutes(stats.amplitudeMin)}</div>}
+                          </div>
+                        ) : <div className="text-[10px] text-slate-500">Non démarré</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div className="mt-8 text-center text-[10px] text-slate-600">KidsTime · Éléonore Aguillon · ACMA Fiction</div>
+      </div>
     </div>
   );
 }
