@@ -69,8 +69,6 @@ interface Project {
   children: Child[];
   groups: Group[];
   shootingDays: Record<string, ShootingDay>;
-  share_token?: string;
-  share_password?: string;
 }
 
 interface SessionStats {
@@ -137,15 +135,7 @@ function formatTime(v: string | Date | undefined): string {
 function isVacation(child: Child, dateStr: string): boolean {
   return (child.vacation_periods || []).some(p => dateStr >= p.start && dateStr <= p.end);
 }
-function todayStr(): string { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
-const ROLE_ORDER: Record<string, number> = { role: 0, silhouette: 1, figurant: 2 };
-function sortByRoleThenAlpha(cs: Child[]): Child[] {
-  return [...cs].sort((a, b) => {
-    const ra = ROLE_ORDER[a.role ?? ""] ?? 3, rb = ROLE_ORDER[b.role ?? ""] ?? 3;
-    if (ra !== rb) return ra - rb;
-    return `${a.last_name} ${a.first_name}`.localeCompare(`${b.last_name} ${b.first_name}`, "fr");
-  });
-}
+function todayStr(): string { return new Date().toISOString().slice(0, 10); }
 function nowISO(): string   { return new Date().toISOString(); }
 function timeStrToISO(dateStr: string, timeStr: string): string {
   return new Date(`${dateStr}T${timeStr}:00`).toISOString();
@@ -309,7 +299,6 @@ function exportDayToPDF(project: Project, dateStr: string) {
     return `<table><tr><th colspan="4">${child.first_name} ${child.last_name}${child.role ? ` — ${ROLE_LABELS[child.role as ChildRole]}` : ""} — ${getAge(child.dob)} ans (${band} ans) — ${vacation ? "Vacances" : "Scolaire"}</th></tr>
       <tr><td><b>Convocation</b><br>${session?.start_time ? formatTime(session.start_time) : "--"}</td><td><b>Fin</b><br>${session?.end_time ? formatTime(session.end_time) : "--"}</td><td><b>Amplitude</b><br>${stats ? formatMinutes(stats.amplitudeMin) : "--"}</td><td><b>Max amplitude</b><br>${formatMinutes(maxAmp)}</td></tr>
       <tr><td><b>Travail total</b><br>${stats ? formatMinutes(stats.workMin) : "--"}</td><td><b>Max travail</b><br>${formatMinutes(maxWork)}</td><td><b>Dépass. travail</b><br><span class="${workOver > 0 ? "over" : "ok"}">${workOver > 0 ? formatMinutes(workOver) : "OK"}</span></td><td><b>Dépass. amplitude</b><br><span class="${ampOver > 0 ? "over" : "ok"}">${ampOver > 0 ? formatMinutes(ampOver) : "OK"}</span></td></tr>
-      ${(() => { const derog = (child.derogations || []).find((d: Derogation) => d.date === dateStr); const over20h = !derog && session?.end_time != null && new Date(session.end_time) > new Date(`${dateStr}T20:00:00`); return over20h ? `<tr><td colspan="4" style="color:#dc2626;font-weight:bold;background:#fff5f5">🚫 Dépassement 20h — fin à ${formatTime(session!.end_time)} — aucune dérogation enregistrée</td></tr>` : ""; })()}
       <tr><td><b>🍽 Déjeuner</b><br>${stats ? formatMinutes(stats.dejeunerMin) : "--"}</td><td><b>Plages déjeuner</b><br>${dStr}</td><td><b>Pauses valides</b><br>${stats ? formatMinutes(stats.validBreakMin) : "--"}</td><td><b>Plages de pauses</b><br>${bStr}</td></tr></table>`;
   };
   const allRows = buildExportRows(project, dateStr);
@@ -355,13 +344,11 @@ function exportChildAllDays(project: Project, child: Child) {
     const bStr = stats?.breakSlots.filter(b => b.valid && b.kind === "pause").map((b) => `${formatTime(b.start)}-${formatTime(b.end)} (${formatMinutes(b.durationMin)})`).join(", ") || "--";
     const dStr = stats?.breakSlots.filter(b => b.kind === "dejeuner").map((b) => `🍽 ${formatTime(b.start)}-${formatTime(b.end)} (${formatMinutes(b.durationMin)})`).join(", ") || "--";
     const dateLabel = new Date(dateStr + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "short", day: "numeric", month: "short" });
-    const derogForDay = (child.derogations || []).find(d => d.date === dateStr);
-    const endAfter20h = !derogForDay && session?.end_time != null && new Date(session.end_time) > new Date(`${dateStr}T20:00:00`);
     return `<tr>
       <td>${dateLabel}</td>
       <td>${vacation ? "🌴 Vac." : "🏫 Scol."}</td>
       <td>${session?.start_time ? formatTime(session.start_time) : "--"}</td>
-      <td>${session?.end_time ? `<span style="color:${endAfter20h ? "#dc2626" : "inherit"};font-weight:${endAfter20h ? "bold" : "normal"}">${formatTime(session.end_time)}${endAfter20h ? " 🚫" : ""}</span>` : "--"}</td>
+      <td>${session?.end_time ? formatTime(session.end_time) : "--"}</td>
       <td><span style="color:${ampOver > 0 ? "#dc2626" : stats && stats.amplitudeMin === maxAmp ? "#ea580c" : "#16a34a"}">${stats ? formatMinutes(stats.amplitudeMin) : "--"} / ${formatMinutes(maxAmp)}</span></td>
       <td><span style="color:${workOver > 0 ? "#dc2626" : "#16a34a"}">${stats ? formatMinutes(stats.workMin) : "--"} / ${formatMinutes(maxWork)}</span></td>
       <td>${stats ? formatMinutes(stats.dejeunerMin) : "--"}</td>
@@ -490,10 +477,21 @@ function exportProjectGlobalPDF(project: Project) {
   const DAY_LETTERS = ["D","L","M","M","J","V","S"];
   const MONTH_NAMES = ["JANVIER","FÉVRIER","MARS","AVRIL","MAI","JUIN","JUILLET","AOÛT","SEPTEMBRE","OCTOBRE","NOVEMBRE","DÉCEMBRE"];
 
+  const monthSpans: { month: string; count: number }[] = [];
+  for (const d of sortedDates) {
+    const month = MONTH_NAMES[new Date(d + "T12:00:00").getMonth()];
+    if (!monthSpans.length || monthSpans[monthSpans.length - 1].month !== month) monthSpans.push({ month, count: 1 });
+    else monthSpans[monthSpans.length - 1].count++;
+  }
+
   const TH  = (bg: string) => `style="background:${bg};color:white;border:1px solid #bbb;text-align:center;font-size:7px;padding:3px 2px"`;
   const TDL = `style="text-align:left;padding:3px 6px;border:1px solid #ccc;font-size:8px;background:#f4f6fb;white-space:nowrap"`;
   const TDV = (extra="") => `style="text-align:center;padding:2px 3px;border:1px solid #ccc;font-size:8px;${extra}"`;
   const TDT = (extra="") => `style="text-align:center;padding:2px 4px;border:1px solid #ccc;font-weight:bold;font-size:8px;background:#e8eef8;${extra}"`;
+
+  const headerMonths = monthSpans.map(s => `<th colspan="${s.count}" ${TH("#1e3a5f")}>${s.month}</th>`).join("");
+  const headerJours  = sortedDates.map(d => `<th ${TH("#2d4a6f")}>${DAY_LETTERS[new Date(d+"T12:00:00").getDay()]}</th>`).join("");
+  const headerDates  = sortedDates.map(d => `<th ${TH("#3d5a7f")}>${new Date(d+"T12:00:00").getDate()}</th>`).join("");
 
   let html = `<html><head><meta charset="utf-8">
   <style>
@@ -530,17 +528,6 @@ function exportProjectGlobalPDF(project: Project) {
     const childDates = sortedDates.filter(d => dd[d].inDay);
     if (childDates.length === 0) continue;
 
-    // En-têtes calculés uniquement sur les dates de cet enfant
-    const childMonthSpans: { month: string; count: number }[] = [];
-    for (const d of childDates) {
-      const month = MONTH_NAMES[new Date(d + "T12:00:00").getMonth()];
-      if (!childMonthSpans.length || childMonthSpans[childMonthSpans.length - 1].month !== month) childMonthSpans.push({ month, count: 1 });
-      else childMonthSpans[childMonthSpans.length - 1].count++;
-    }
-    const headerMonths = childMonthSpans.map(s => `<th colspan="${s.count}" ${TH("#1e3a5f")}>${s.month}</th>`).join("");
-    const headerJours  = childDates.map(d => `<th ${TH("#2d4a6f")}>${DAY_LETTERS[new Date(d+"T12:00:00").getDay()]}</th>`).join("");
-    const headerDates  = childDates.map(d => `<th ${TH("#3d5a7f")}>${new Date(d+"T12:00:00").getDate()}</th>`).join("");
-
     let totWork = 0, totDejeuner = 0, totValidPause = 0, totAmp = 0, totWorkOver = 0, totAmpOver = 0;
     for (const d of childDates) {
       const { stats, maxWork, maxAmp } = dd[d];
@@ -554,14 +541,10 @@ function exportProjectGlobalPDF(project: Project) {
     }
 
     const cells = (fn: (d: DayData) => string) =>
-      childDates.map(ds => {
+      sortedDates.map(ds => {
         const d = dd[ds];
+        if (!d.inDay) return `<td ${TDV(d.vacation ? "background:#fffbeb" : "")}></td>`;
         return `<td ${TDV(d.vacation ? "background:#fffbeb" : "")}>${fn(d)}</td>`;
-      }).join("");
-    const cellsWithDate = (fn: (d: DayData, ds: string) => string) =>
-      childDates.map(ds => {
-        const d = dd[ds];
-        return `<td ${TDV(d.vacation ? "background:#fffbeb" : "")}>${fn(d, ds)}</td>`;
       }).join("");
 
     html += `<div class="child-block"><table>
@@ -583,7 +566,7 @@ function exportProjectGlobalPDF(project: Project) {
         <tr>
           <td ${TDL} style="text-align:left;padding:2px 6px;border:1px solid #ccc;font-size:7px;color:#b45309;background:#fffbeb">VACANCES</td>
           <td ${TDV()}></td>
-          ${childDates.map(ds => `<td ${TDV(dd[ds].vacation ? "background:#fffbeb;color:#b45309;font-weight:bold" : "")}>${dd[ds].vacation ? "VAC" : ""}</td>`).join("")}
+          ${sortedDates.map(ds => `<td ${TDV(dd[ds].inDay && dd[ds].vacation ? "background:#fffbeb;color:#b45309;font-weight:bold" : "")}>${dd[ds].inDay && dd[ds].vacation ? "VAC" : ""}</td>`).join("")}
         </tr>
       </thead>
       <tbody>
@@ -596,11 +579,6 @@ function exportProjectGlobalPDF(project: Project) {
           ${cells(d => `<b>${fmtHHMM(d.stats?.workMin ?? 0)}</b>`)}
         </tr>
         <tr><td ${TDL}>Heure de fin de journée</td><td ${TDT()}></td>${cells(d => d.session?.end_time ? formatTime(d.session.end_time) : "")}</tr>
-        <tr>
-          <td ${TDL} style="text-align:left;padding:3px 6px;border:1px solid #ccc;font-size:8px;background:#fff5f5;color:#dc2626;white-space:nowrap">Dépassement 20h (sans dérogation)</td>
-          <td ${TDT()}></td>
-          ${cellsWithDate((d, ds) => { const derog = (child.derogations || []).find(x => x.date === ds); const over = !derog && d.session?.end_time != null && new Date(d.session.end_time) > new Date(`${ds}T20:00:00`); return over ? `<span style="color:#dc2626;font-weight:bold">🚫 ${formatTime(d.session!.end_time)}</span>` : ""; })}
-        </tr>
         <tr><td ${TDL}>Temps de travail autorisé</td><td ${TDT()}></td>${cells(d => fmtHHMM(d.maxWork))}</tr>
         <tr>
           <td ${TDL} style="text-align:left;padding:3px 6px;border:1px solid #ccc;font-size:8px;background:#fff5f5;color:#dc2626;white-space:nowrap">Dépassement temps de travail</td>
@@ -674,16 +652,11 @@ function Btn({ children, variant = "primary", className = "", ...props }: { chil
 // ─── Root ─────────────────────────────────────────────────────────────────────
 export default function App() {
   const [session, setSession] = useState<any>(undefined);
-  const shareToken = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("share") : null;
-
   useEffect(() => {
-    if (shareToken) return;
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_ev, s) => setSession(s));
     return () => subscription.unsubscribe();
-  }, [shareToken]);
-
-  if (shareToken) return <SharedProjectView token={shareToken} />;
+  }, []);
   if (session === undefined) return <div className="min-h-screen bg-[#080d16] flex items-center justify-center"><div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" /></div>;
   if (!session) return <AuthPage onAuth={setSession} />;
   return <MainApp session={session} onSignOut={() => supabase.auth.signOut()} />;
@@ -736,124 +709,13 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [activeDate, setActiveDate] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [isOnline, setIsOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
   const userId = session.user.id;
-  const CACHE_KEY = `kidstime_cache_${userId}`;
-  const notifiedRef = useRef<Set<string>>(new Set());
-
-  useEffect(() => {
-    const on = () => setIsOnline(true);
-    const off = () => setIsOnline(false);
-    window.addEventListener("online", on);
-    window.addEventListener("offline", off);
-    return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
-  }, []);
-
-  const VAPID_PUBLIC_KEY = "BNqqNLZ1roWHMAFWMzIZpgh4n6hDXeziMWITj9gmc-3UoiHMjAcI9duyC_som3FlSstGrnsC6SX9kDuzH90MXlQ";
-
-  async function subscribeToPush(projectId: string) {
-    if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
-    try {
-      const reg = await navigator.serviceWorker.ready;
-      let sub = await reg.pushManager.getSubscription();
-      if (!sub) {
-        sub = await reg.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: VAPID_PUBLIC_KEY,
-        });
-      }
-      await supabase.from("push_subscriptions").upsert({
-        user_id: userId,
-        project_id: projectId,
-        subscription: sub.toJSON(),
-      }, { onConflict: "user_id,project_id" });
-    } catch (e) { console.error("Push subscribe error", e); }
-  }
-
-  useEffect(() => {
-    if ("Notification" in window && Notification.permission === "default") {
-      Notification.requestPermission().then(perm => {
-        if (perm === "granted" && activeProject) subscribeToPush(activeProject.id);
-      });
-    } else if ("Notification" in window && Notification.permission === "granted" && activeProject) {
-      subscribeToPush(activeProject.id);
-    }
-  }, [activeProject?.id]);
-
-  useEffect(() => {
-    if (view !== "shooting" || !activeProject || !activeDate) return;
-    const check = () => {
-      const day = activeProject.shootingDays[activeDate];
-      if (!day) return;
-      for (const child of activeProject.children) {
-        const session = day.sessions?.[child.id];
-        if (!session?.start_time || session.status === "done") continue;
-        const vacation = isVacation(child, activeDate);
-        const band = getAgeBand(child.dob);
-        const period: Period = vacation ? "vacation" : "school";
-        const maxWork = activeProject.rules.maxWorkMinutes[band][period];
-        const maxAmp = activeProject.rules.maxAmplitudeMinutes;
-        const stats = computeSessionStats(session, activeProject.rules);
-        if (!stats) continue;
-        const name = `${child.first_name} ${child.last_name}`;
-        if (stats.workMin >= maxWork * 0.8 && stats.workMin < maxWork) {
-          const key = `work-warn-${child.id}-${activeDate}`;
-          if (!notifiedRef.current.has(key)) {
-            notifiedRef.current.add(key);
-            if (Notification.permission === "granted") new Notification("⚠ Temps de travail", { body: `${name} approche du max (${formatMinutes(stats.workMin)} / ${formatMinutes(maxWork)})`, icon: "/favicon.ico" });
-          }
-        }
-        if (stats.workMin >= maxWork) {
-          const key = `work-over-${child.id}-${activeDate}`;
-          if (!notifiedRef.current.has(key)) {
-            notifiedRef.current.add(key);
-            if (Notification.permission === "granted") new Notification("🔴 Dépassement travail", { body: `${name} a dépassé le temps max de travail !`, icon: "/favicon.ico" });
-          }
-        }
-        if (stats.amplitudeMin >= maxAmp * 0.9 && stats.amplitudeMin < maxAmp) {
-          const key = `amp-warn-${child.id}-${activeDate}`;
-          if (!notifiedRef.current.has(key)) {
-            notifiedRef.current.add(key);
-            if (Notification.permission === "granted") new Notification("⚠ Amplitude", { body: `${name} approche de l'amplitude max (${formatMinutes(stats.amplitudeMin)} / ${formatMinutes(maxAmp)})`, icon: "/favicon.ico" });
-          }
-        }
-        if (stats.amplitudeMin >= maxAmp) {
-          const key = `amp-over-${child.id}-${activeDate}`;
-          if (!notifiedRef.current.has(key)) {
-            notifiedRef.current.add(key);
-            if (Notification.permission === "granted") new Notification("🔴 Amplitude dépassée", { body: `${name} a dépassé l'amplitude maximale !`, icon: "/favicon.ico" });
-          }
-        }
-      }
-    };
-    check();
-    const interval = setInterval(check, 60000);
-    return () => clearInterval(interval);
-  }, [view, activeProject, activeDate]);
-
-  async function logAction(dateStr: string, childId: string, action: string) {
-    if (!activeProject) return;
-    await supabase.from("action_logs").insert({
-      project_id: activeProject.id,
-      shooting_day_date: dateStr,
-      child_id: childId,
-      action,
-      performed_by: session.user.email ?? "inconnu",
-    });
-  }
 
   const loadProjects = useCallback(async () => {
     setLoading(true);
-    if (!navigator.onLine) {
-      try { const cached = localStorage.getItem(CACHE_KEY); if (cached) setProjects(JSON.parse(cached)); } catch {}
-      setLoading(false); return;
-    }
     const { data } = await supabase.from("projects").select("*").eq("user_id", userId).order("created_at");
-    const list = (data || []) as Project[];
-    setProjects(list);
-    try { localStorage.setItem(CACHE_KEY, JSON.stringify(list)); } catch {}
-    setLoading(false);
-  }, [userId, CACHE_KEY]);
+    setProjects((data || []) as Project[]); setLoading(false);
+  }, [userId]);
 
   useEffect(() => { loadProjects(); }, [loadProjects]);
 
@@ -867,35 +729,10 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     const shootingDays: Record<string, ShootingDay> = {};
     (days || []).forEach((d: ShootingDay) => { shootingDays[d.date] = d; });
     const mappedChildren = (children || []).map((c: any) => ({ ...c, role: c.child_role ?? undefined }));
-    const full = { ...proj, children: mappedChildren, groups: groups || [], shootingDays };
-    try { localStorage.setItem(`kidstime_project_${id}`, JSON.stringify(full)); } catch {}
-    return full;
+    return { ...proj, children: mappedChildren, groups: groups || [], shootingDays };
   }
 
-  async function openProject(id: string) {
-    setLoading(true);
-    if (!navigator.onLine) {
-      try {
-        const cached = localStorage.getItem(`kidstime_project_${id}`);
-        if (cached) {
-          const f = JSON.parse(cached);
-          setActiveProject(f);
-          const today = todayStr();
-          const todayDay = f.shootingDays?.[today];
-          if (todayDay && (todayDay.child_ids || []).length > 0) { setActiveDate(today); setView("shooting"); }
-          else setView("project");
-          setLoading(false); return;
-        }
-      } catch {}
-    }
-    const f = await loadFullProject(id);
-    setActiveProject(f);
-    const today = todayStr();
-    const todayDay = f.shootingDays?.[today];
-if (todayDay && (todayDay.child_ids || []).length > 0) { setActiveDate(today); setView("shooting"); }
-    else setView("project");
-    setLoading(false);
-  }
+  async function openProject(id: string) { setLoading(true); const f = await loadFullProject(id); setActiveProject(f); setView("project"); setLoading(false); }
 
   async function refreshActive() {
     if (!activeProject?.id) return;
@@ -977,18 +814,15 @@ if (todayDay && (todayDay.child_ids || []).length > 0) { setActiveDate(today); s
   }
   async function startSessionsSequentially(dateStr: string, childIds: string[], timeISO?: string) {
     const day = await getOrCreateDay(dateStr); const sessions = { ...(day.sessions || {}) }; let changed = false;
-    const started: string[] = [];
-    for (const childId of childIds) { if (!sessions[childId]?.start_time) { sessions[childId] = { start_time: timeISO || nowISO(), events: [], status: "working" }; changed = true; started.push(childId); } }
+    for (const childId of childIds) { if (!sessions[childId]?.start_time) { sessions[childId] = { start_time: timeISO || nowISO(), events: [], status: "working" }; changed = true; } }
     if (!changed) return;
     await supabase.from("shooting_days").update({ sessions }).eq("id", day.id); await refreshActive();
-    for (const childId of started) { logAction(dateStr, childId, "Convocation"); }
   }
   async function startSession(dateStr: string, childId: string, timeISO?: string) { await startSessionsSequentially(dateStr, [childId], timeISO); }
-  async function cancelSession(dateStr: string, childId: string) { const day = activeProject!.shootingDays[dateStr]; if (!day) return; const sessions = { ...(day.sessions || {}) }; delete sessions[childId]; await updateDaySessions(dateStr, sessions); logAction(dateStr, childId, "Annulation de session"); }
+  async function cancelSession(dateStr: string, childId: string) { const day = activeProject!.shootingDays[dateStr]; if (!day) return; const sessions = { ...(day.sessions || {}) }; delete sessions[childId]; await updateDaySessions(dateStr, sessions); }
   async function applyEventToChildren(dateStr: string, childIds: string[], eventType: "pause_start" | "pause_end" | "dejeuner_start" | "dejeuner_end", timeISO?: string) {
     const day = activeProject!.shootingDays[dateStr]; if (!day) return;
     const sessions = { ...(day.sessions || {}) };
-    const applied: { childId: string; actualType: SessionEvent["type"] }[] = [];
     for (const childId of childIds) {
       const s = sessions[childId]; if (!s?.start_time || s.status === "done") continue;
       if (eventType === "pause_start" && s.status !== "working") continue;
@@ -1000,14 +834,8 @@ if (todayDay && (todayDay.child_ids || []).length > 0) { setActiveDate(today); s
       const actualType: SessionEvent["type"] = (eventType === "pause_end" && s.status === "dejeuner") ? "dejeuner_end" : eventType;
       const newStatus: Session["status"] = actualType === "pause_start" ? "paused" : actualType === "dejeuner_start" ? "dejeuner" : "working";
       sessions[childId] = { ...s, status: newStatus, events: [...(s.events || []), { type: actualType, time: timeISO || nowISO() }] };
-      applied.push({ childId, actualType });
     }
     await updateDaySessions(dateStr, sessions);
-    for (const { childId, actualType } of applied) {
-      if (actualType === "pause_start") logAction(dateStr, childId, "Pause démarrée");
-      else if (actualType === "pause_end" || actualType === "dejeuner_end") logAction(dateStr, childId, "Reprise");
-      else if (actualType === "dejeuner_start") logAction(dateStr, childId, "Déjeuner démarré");
-    }
   }
   async function cancelLastEvent(dateStr: string, childId: string) {
     const day = activeProject!.shootingDays[dateStr]; if (!day) return;
@@ -1017,39 +845,28 @@ if (todayDay && (todayDay.child_ids || []).length > 0) { setActiveDate(today); s
     if (lastEv?.type === "pause_start") status = "paused";
     else if (lastEv?.type === "dejeuner_start") status = "dejeuner";
     sessions[childId] = { ...s, events, status, end_time: undefined }; await updateDaySessions(dateStr, sessions);
-    logAction(dateStr, childId, "Annulation dernier événement");
   }
   async function endSessions(dateStr: string, childIds: string[], timeISO?: string) {
     const day = activeProject!.shootingDays[dateStr]; if (!day) return;
     const sessions = { ...(day.sessions || {}) };
-    const ended: string[] = [];
     for (const childId of childIds) {
       const s = sessions[childId]; if (!s?.start_time || s.status === "done") continue;
       const events = [...(s.events || [])];
       if (s.status === "paused") events.push({ type: "pause_end", time: timeISO || nowISO() });
       else if (s.status === "dejeuner") events.push({ type: "dejeuner_end", time: timeISO || nowISO() });
       sessions[childId] = { ...s, end_time: timeISO || nowISO(), status: "done", events };
-      ended.push(childId);
     }
     await updateDaySessions(dateStr, sessions);
-    for (const childId of ended) { logAction(dateStr, childId, "Fin de journée"); }
   }
   async function reopenSession(dateStr: string, childId: string) { const day = activeProject!.shootingDays[dateStr]; if (!day) return; const sessions = { ...(day.sessions || {}) }; sessions[childId] = { ...sessions[childId], status: "working", end_time: undefined }; await updateDaySessions(dateStr, sessions); }
   async function editEventTime(dateStr: string, childId: string, eventIndex: number, newTimeISO: string) { const day = activeProject!.shootingDays[dateStr]; if (!day) return; const sessions = { ...(day.sessions || {}) }; const s = { ...sessions[childId] }; const events = [...(s.events || [])]; events[eventIndex] = { ...events[eventIndex], time: newTimeISO }; s.events = events; sessions[childId] = s; await updateDaySessions(dateStr, sessions); }
   async function editStartTime(dateStr: string, childId: string, newTimeISO: string) { const day = activeProject!.shootingDays[dateStr]; if (!day) return; const sessions = { ...(day.sessions || {}) }; sessions[childId] = { ...sessions[childId], start_time: newTimeISO }; await updateDaySessions(dateStr, sessions); }
   async function editEndTime(dateStr: string, childId: string, newTimeISO: string) { const day = activeProject!.shootingDays[dateStr]; if (!day) return; const sessions = { ...(day.sessions || {}) }; sessions[childId] = { ...sessions[childId], end_time: newTimeISO }; await updateDaySessions(dateStr, sessions); }
 
-  async function generateShareToken(projectId: string): Promise<string> {
-    const token = crypto.randomUUID();
-    await supabase.from("projects").update({ share_token: token }).eq("id", projectId);
-    await refreshActive();
-    return token;
-  }
-
   const Fonts = () => <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@700;800&display=swap" rel="stylesheet" />;
   if (loading && view === "home") return <div className="min-h-screen bg-[#080d16] flex items-center justify-center"><Fonts /><div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" /></div>;
 
-  if (view === "home") return <><Fonts /><HomeView projects={projects} userEmail={session.user.email} onCreate={createProject} onOpen={openProject} onDelete={deleteProject} onSignOut={onSignOut} isOnline={isOnline} /></>;
+  if (view === "home") return <><Fonts /><HomeView projects={projects} userEmail={session.user.email} onCreate={createProject} onOpen={openProject} onDelete={deleteProject} onSignOut={onSignOut} /></>;
   if (view === "project" && activeProject) return <><Fonts /><ProjectView project={activeProject}
     onBack={() => { setView("home"); loadProjects(); }}
     onAddChild={addChild} onAddChildren={addChildren} onUpdateChild={updateChild} onRemoveChild={removeChild}
@@ -1059,9 +876,6 @@ if (todayDay && (todayDay.child_ids || []).length > 0) { setActiveDate(today); s
     onExportProject={() => exportProjectGlobal(activeProject)}
     onExportProjectPDF={() => exportProjectGlobalPDF(activeProject)}
     onExportChildDays={child => exportChildAllDays(activeProject, child)}
-    onDelete={() => { deleteProject(activeProject.id); setView("home"); }}
-    onGenerateShareToken={() => generateShareToken(activeProject.id)}
-    isOnline={isOnline}
   /></>;
   if (view === "shooting" && activeProject && activeDate) return <><Fonts /><ShootingView project={activeProject} dateStr={activeDate}
     onBack={() => { setView("project"); refreshActive(); }}
@@ -1083,11 +897,10 @@ if (todayDay && (todayDay.child_ids || []).length > 0) { setActiveDate(today); s
   return null;
 }
 
-function HomeView({ projects, userEmail, onCreate, onOpen, onDelete, onSignOut, isOnline }: { projects: Project[]; userEmail: string; onCreate: (n: string) => void; onOpen: (id: string) => void; onDelete: (id: string) => void; onSignOut: () => void; isOnline: boolean }) {
+function HomeView({ projects, userEmail, onCreate, onOpen, onDelete, onSignOut }: { projects: Project[]; userEmail: string; onCreate: (n: string) => void; onOpen: (id: string) => void; onDelete: (id: string) => void; onSignOut: () => void }) {
   const [name, setName] = useState("");
   return (
     <div className="min-h-screen bg-[#080d16] text-white" style={{ fontFamily: "'DM Mono', monospace" }}>
-      {!isOnline && <OfflineBanner />}
       <div className="fixed inset-0 opacity-[0.025]" style={{ backgroundImage: "linear-gradient(#fff 1px,transparent 1px),linear-gradient(90deg,#fff 1px,transparent 1px)", backgroundSize: "40px 40px" }} />
       {/* Fix #1: safe area padding for iPhone notch */}
       <div className="relative max-w-2xl mx-auto px-4 pt-safe-top py-10">
@@ -1111,7 +924,7 @@ function HomeView({ projects, userEmail, onCreate, onOpen, onDelete, onSignOut, 
             {projects.map(p => (
               <div key={p.id} className="flex items-center gap-3 bg-slate-900/50 border border-slate-700 rounded-xl px-4 py-4 active:bg-slate-800 transition-colors cursor-pointer" onClick={() => onOpen(p.id)}>
                 <div className="flex-1"><div className="font-bold text-white" style={{ fontFamily: "Syne, sans-serif" }}>{p.name}</div><div className="text-xs text-slate-500">{new Date(p.created_at).toLocaleDateString("fr-FR")}</div></div>
-                <span className="text-slate-600 text-xs">→</span>
+                <button onClick={e => { e.stopPropagation(); if (window.confirm(`Supprimer "${p.name}" ? Cette action est irréversible.`)) onDelete(p.id); }} className="text-slate-600 hover:text-red-400 text-xl w-10 h-10 flex items-center justify-center">✕</button>
               </div>
             ))}
           </div>
@@ -1121,7 +934,7 @@ function HomeView({ projects, userEmail, onCreate, onOpen, onDelete, onSignOut, 
   );
 }
 
-function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild, onRemoveChild, onArchiveChild, onAddGroup, onUpdateGroup, onRemoveGroup, onUpdateRules, onOpenDay, onExportProject, onExportProjectPDF, onExportChildDays, onDelete, onGenerateShareToken, isOnline }: {
+function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild, onRemoveChild, onArchiveChild, onAddGroup, onUpdateGroup, onRemoveGroup, onUpdateRules, onOpenDay, onExportProject, onExportProjectPDF, onExportChildDays }: {
   project: Project; onBack: () => void;
   onAddChild: (c: any) => void; onAddChildren: (cs: any[]) => Promise<void>;
   onUpdateChild: (id: string, d: any) => void; onRemoveChild: (id: string) => void;
@@ -1130,26 +943,20 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
   onUpdateRules: (fn: (r: Rules) => Rules) => void; onOpenDay: (date: string) => void;
   onExportProject: () => void; onExportProjectPDF: () => void;
   onExportChildDays: (child: Child) => void;
-  onDelete: () => void;
-  onGenerateShareToken: () => Promise<string>;
-  isOnline: boolean;
 }) {
   const [tab, setTab] = useState<"calendar" | "children" | "groups" | "settings">("calendar");
   const [childModal, setChildModal] = useState<Child | "new" | null>(null);
   const [groupModal, setGroupModal] = useState<Group | "new" | null>(null);
-  const [shareModal, setShareModal] = useState(false);
   const tabs = [{ id: "calendar", label: "📅" }, { id: "children", label: "👦" }, { id: "groups", label: "👥" }, { id: "settings", label: "⚙️" }];
   const tabLabels: Record<string, string> = { calendar: "Calendrier", children: "Enfants", groups: "Groupes", settings: "Paramètres" };
   return (
     <div className="min-h-screen bg-[#080d16] text-white pb-20" style={{ fontFamily: "'DM Mono', monospace" }}>
-      {!isOnline && <OfflineBanner />}
       {/* Fix #1: sticky header with safe area */}
       <div className="sticky top-0 z-10 bg-[#080d16] border-b border-slate-800 px-4 py-3 flex items-center gap-3">
         <button onClick={onBack} className="text-slate-400 hover:text-white text-sm w-8 h-8 flex items-center justify-center rounded-lg border border-slate-700">←</button>
         <h1 className="text-base font-extrabold truncate flex-1" style={{ fontFamily: "Syne, sans-serif" }}>{project.name}</h1>
-        <button onClick={() => setShareModal(true)} className="text-slate-400 hover:text-blue-400 text-xs border border-slate-700 px-3 py-1.5 rounded-lg">🔗 Partager</button>
+        <div className="text-[10px] text-slate-500">{project.children.length} enfant(s)</div>
       </div>
-      {shareModal && <ShareModal project={project} onGenerateToken={onGenerateShareToken} onClose={() => setShareModal(false)} />}
 
       {/* Fix #5/#6: project export buttons */}
       {tab === "calendar" && (
@@ -1163,7 +970,7 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
         {tab === "calendar" && <CalendarTab project={project} onOpenDay={onOpenDay} />}
         {tab === "children" && <ChildrenTab project={project} onAdd={() => setChildModal("new")} onEdit={c => setChildModal(c)} onRemove={onRemoveChild} onImport={onAddChildren} onArchive={onArchiveChild} onExportChildDays={onExportChildDays} />}
         {tab === "groups" && <GroupsTab project={project} onAdd={() => setGroupModal("new")} onRemove={onRemoveGroup} onUpdateGroup={onUpdateGroup} />}
-        {tab === "settings" && <SettingsTab rules={project.rules} onUpdateRules={onUpdateRules} projectName={project.name} onDelete={onDelete} projectId={project.id} />}
+        {tab === "settings" && <SettingsTab rules={project.rules} onUpdateRules={onUpdateRules} />}
       </div>
 
       {/* Fix #1: bottom tab bar for mobile */}
@@ -1178,7 +985,6 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
 
       {childModal !== null && (
         <ChildFormModal child={childModal === "new" ? null : childModal}
-          shootingDays={project.shootingDays}
           onSave={data => { childModal === "new" ? onAddChild(data) : onUpdateChild((childModal as Child).id, data); setChildModal(null); }}
           onClose={() => setChildModal(null)} />
       )}
@@ -1237,20 +1043,13 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
   const [importPreview, setImportPreview] = useState<any[]>([]);
   const [showPreview, setShowPreview] = useState(false);
   const [importing, setImporting] = useState(false);
-  const [duplicates, setDuplicates] = useState<any[]>([]);
-  const [showDuplicateWarning, setShowDuplicateWarning] = useState(false);
   const [roleTab, setRoleTab] = useState<ChildRole | "all">("all");
   const [showArchived, setShowArchived] = useState(false);
-  const [search, setSearch] = useState("");
-  const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
 
   const activeChildren = project.children.filter(c => !c.archived);
   const archivedChildren = project.children.filter(c => c.archived);
   const rolesPresent = ALL_ROLES.filter(r => activeChildren.some(c => c.role === r));
-  const baseChildren = sortByRoleThenAlpha(showArchived ? archivedChildren : (roleTab === "all" ? activeChildren : activeChildren.filter(c => c.role === roleTab)));
-  const displayChildren = search.trim()
-    ? baseChildren.filter(c => normalize(`${c.first_name} ${c.last_name}`).includes(normalize(search)) || normalize(`${c.last_name} ${c.first_name}`).includes(normalize(search)))
-    : baseChildren;
+  const displayChildren = showArchived ? archivedChildren : (roleTab === "all" ? activeChildren : activeChildren.filter(c => c.role === roleTab));
 
   function downloadTemplate() {
     const csv = "Nom Prénom;Statut (role/silhouette/figurant);Date de naissance (JJ/MM/AAAA);Début vacances (JJ/MM/AAAA);Fin vacances (JJ/MM/AAAA)\nMartin Léa;role;15/03/2015;01/07/2025;31/08/2025\n";
@@ -1302,37 +1101,11 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
     e.target.value = "";
   }
 
-  function detectDuplicates(preview: any[]): any[] {
-    return preview.filter(c =>
-      project.children.some(existing =>
-        normalize(existing.first_name) === normalize(c.firstName) &&
-        normalize(existing.last_name) === normalize(c.lastName) &&
-        existing.dob === c.dob
-      )
-    );
-  }
-
-  function handleConfirmImportClick() {
-    const dupes = detectDuplicates(importPreview);
-    if (dupes.length > 0) {
-      setDuplicates(dupes);
-      setShowDuplicateWarning(true);
-    } else {
-      doImport(importPreview);
-    }
-  }
-
-  async function doImport(children: any[]) {
-    setShowDuplicateWarning(false);
-    setDuplicates([]);
+  async function confirmImport() {
     setImporting(true);
-    try { await onImport(children); setShowPreview(false); setImportPreview([]); setImportMsg(`✅ ${children.length} enfant(s) importé(s) !`); }
+    try { await onImport(importPreview); setShowPreview(false); setImportPreview([]); setImportMsg(`✅ ${importPreview.length} enfant(s) importé(s) !`); }
     catch { setImportMsg("❌ Erreur lors de l'import."); }
     setImporting(false);
-  }
-
-  async function confirmImport() {
-    handleConfirmImportClick();
   }
 
   return (
@@ -1340,19 +1113,6 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
       <div className="flex items-center justify-between mb-3">
         <h2 className="font-bold text-base" style={{ fontFamily: "Syne, sans-serif" }}>Enfants ({activeChildren.length})</h2>
         <Btn onClick={onAdd} className="text-xs py-2 px-3">+ Ajouter</Btn>
-      </div>
-
-      {/* Recherche */}
-      <div className="relative mb-3">
-        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm">🔍</span>
-        <input
-          type="text"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          placeholder="Rechercher un enfant…"
-          className="w-full bg-slate-800/80 border border-slate-600 rounded-xl pl-8 pr-8 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
-        />
-        {search && <button onClick={() => setSearch("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white text-sm">✕</button>}
       </div>
 
       {/* Import zone */}
@@ -1369,24 +1129,10 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
             <div className="space-y-1 max-h-40 overflow-y-auto mb-2">
               {importPreview.map((c, i) => <div key={i} className="text-xs flex gap-2 items-center flex-wrap"><span className="text-white font-semibold">{c.firstName} {c.lastName}</span><span className="text-slate-500">{c.dob}</span>{c.role && <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${ROLE_COLORS[c.role as ChildRole]}`}>{ROLE_LABELS[c.role as ChildRole]}</span>}</div>)}
             </div>
-            {showDuplicateWarning && duplicates.length > 0 && (
-              <div className="mb-3 bg-amber-900/30 border border-amber-600/60 rounded-xl p-3">
-                <div className="text-xs font-semibold text-amber-300 mb-1">⚠ {duplicates.length} doublon(s) détecté(s) :</div>
-                <div className="space-y-0.5 max-h-24 overflow-y-auto mb-3">
-                  {duplicates.map((c, i) => <div key={i} className="text-xs text-amber-200">{c.firstName} {c.lastName} · {c.dob}</div>)}
-                </div>
-                <div className="flex gap-2">
-                  <button onClick={() => { setShowDuplicateWarning(false); setDuplicates([]); }} className="flex-1 text-xs text-slate-300 border border-slate-600 py-2 rounded-lg">Annuler</button>
-                  <button onClick={() => doImport(importPreview)} disabled={importing} className="flex-1 text-xs bg-amber-700 text-white py-2 rounded-lg disabled:opacity-50">{importing ? "Import…" : "Importer quand même"}</button>
-                </div>
-              </div>
-            )}
-            {!showDuplicateWarning && (
-              <div className="flex gap-2">
-                <button onClick={() => { setShowPreview(false); setImportMsg(""); }} className="text-xs text-slate-400">Annuler</button>
-                <button onClick={confirmImport} disabled={importing} className="flex-1 text-xs bg-blue-600 text-white py-2 rounded-lg disabled:opacity-50">{importing ? "Import…" : `Confirmer (${importPreview.length})`}</button>
-              </div>
-            )}
+            <div className="flex gap-2">
+              <button onClick={() => { setShowPreview(false); setImportMsg(""); }} className="text-xs text-slate-400">Annuler</button>
+              <button onClick={confirmImport} disabled={importing} className="flex-1 text-xs bg-blue-600 text-white py-2 rounded-lg disabled:opacity-50">{importing ? "Import…" : `Confirmer (${importPreview.length})`}</button>
+            </div>
           </div>
         )}
       </div>
@@ -1408,7 +1154,7 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
       )}
 
       {displayChildren.length === 0
-        ? <div className="text-slate-500 text-center py-10 text-sm">{search.trim() ? `Aucun résultat pour « ${search} »` : showArchived ? "Aucun enfant archivé" : "Aucun enfant enregistré"}</div>
+        ? <div className="text-slate-500 text-center py-10 text-sm">{showArchived ? "Aucun enfant archivé" : "Aucun enfant enregistré"}</div>
         : <div className="space-y-2">{displayChildren.map(c => (
           <div key={c.id} className={`bg-slate-900/50 border rounded-xl px-3 py-3 ${c.archived ? "border-slate-700/40 opacity-60" : "border-slate-700"}`}>
             <div className="flex items-center gap-3">
@@ -1430,15 +1176,7 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
                 ? <button onClick={() => onArchive(c.id, true)} className="text-[10px] text-amber-400 border border-amber-800/60 px-2 py-1 rounded-lg">📦 Archiver</button>
                 : <button onClick={() => onArchive(c.id, false)} className="text-[10px] text-emerald-400 border border-emerald-800/60 px-2 py-1 rounded-lg">↩ Désarchiver</button>
               }
-              {confirmRemoveId === c.id ? (
-                <div className="flex items-center gap-1 ml-auto">
-                  <span className="text-[10px] text-red-300">Supprimer ?</span>
-                  <button onClick={() => { onRemove(c.id); setConfirmRemoveId(null); }} className="text-[10px] text-white bg-red-700 hover:bg-red-600 px-2 py-1 rounded-lg">Oui</button>
-                  <button onClick={() => setConfirmRemoveId(null)} className="text-[10px] text-slate-400 border border-slate-700 px-2 py-1 rounded-lg">Non</button>
-                </div>
-              ) : (
-                <button onClick={() => setConfirmRemoveId(c.id)} className="text-[10px] text-red-400 border border-red-800/60 px-2 py-1 rounded-lg ml-auto">🗑</button>
-              )}
+              <button onClick={() => onRemove(c.id)} className="text-[10px] text-red-400 border border-red-800/60 px-2 py-1 rounded-lg ml-auto">🗑</button>
             </div>
           </div>
         ))}</div>
@@ -1511,57 +1249,24 @@ function GroupsTab({ project, onAdd, onRemove, onUpdateGroup }: { project: Proje
   );
 }
 
-function SettingsTab({ rules, onUpdateRules, projectName, onDelete, projectId }: { rules: Rules; onUpdateRules: (fn: (r: Rules) => Rules) => void; projectName: string; onDelete: () => void; projectId: string }) {
-  const [showDeleteZone, setShowDeleteZone] = useState(false);
-  const [deleteConfirm, setDeleteConfirm] = useState("");
-  const [logs, setLogs] = useState<any[]>([]);
-  const [logsLoading, setLogsLoading] = useState(false);
-  const [logsPage, setLogsPage] = useState(0);
-  const PAGE_SIZE = 20;
-
-  useEffect(() => {
-    setLogsLoading(true);
-    supabase.from("action_logs")
-      .select("*, children(first_name, last_name)")
-      .eq("project_id", projectId)
-      .order("performed_at", { ascending: false })
-      .range(logsPage * PAGE_SIZE, (logsPage + 1) * PAGE_SIZE - 1)
-      .then(({ data }) => { setLogs(data || []); setLogsLoading(false); });
-  }, [projectId, logsPage]);
-
-  const BL: Record<AgeBand, string> = { "0-2": "< 3 ans", "3-5": "3–5 ans", "6-11": "6–11 ans", "12-16": "12–16 ans" };
-
-  function setRule(key: string, value: string) {
-    onUpdateRules(r => ({ ...r, [key]: Number(value) }));
+function SettingsTab({ rules, onUpdateRules }: { rules: Rules; onUpdateRules: (fn: (r: Rules) => Rules) => void }) {
+  function setRule(path: string, value: string) {
+    onUpdateRules(r => { const copy = JSON.parse(JSON.stringify(r)); const keys = path.split("."); let obj: any = copy; for (let i = 0; i < keys.length - 1; i++) obj = obj[keys[i]]; obj[keys[keys.length - 1]] = Number(value); return copy; });
   }
-
+  const BL: Record<AgeBand, string> = { "0-2": "< 3 ans", "3-5": "3–5 ans", "6-11": "6–11 ans", "12-16": "12–16 ans" };
   return (
     <div className="space-y-4">
-      <h2 className="font-bold text-base mb-1" style={{ fontFamily: "Syne, sans-serif" }}>Paramètres</h2>
-
-      {/* Paramètres ajustables */}
+      <h2 className="font-bold text-base mb-1" style={{ fontFamily: "Syne, sans-serif" }}>Paramètres DRIEETS</h2>
       <div className="space-y-2">
-        <h3 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Paramètres ajustables</h3>
-        {([["Amplitude max", "maxAmplitudeMinutes", 60, 720, 30], ["Pause minimum", "minBreakMinutes", 5, 60, 1]] as const).map(([label, key, min, max, step]) => (
+        {([["Amplitude max", "maxAmplitudeMinutes", 60, 720, 30], ["Pause minimum", "minBreakMinutes", 5, 60, 1], ["Repos entre journées", "minRestBetweenDays", 480, 1440, 30]] as const).map(([label, key, min, max, step]) => (
           <div key={key} className="bg-slate-900/50 border border-slate-700 rounded-xl p-3 flex items-center justify-between">
             <div className="text-sm text-white">{label}</div>
             <div className="flex items-center gap-2">
-              <input type="number" min={min} max={max} step={step} value={(rules as any)[key]}
-                onChange={e => setRule(key, e.target.value)}
-                className="w-20 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-white text-sm text-center focus:outline-none focus:border-blue-500" />
+              <input type="number" min={min} max={max} step={step} value={(rules as any)[key]} onChange={e => setRule(key, e.target.value)} className="w-20 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-white text-sm text-center" />
               <span className="text-xs text-slate-400 w-12">{formatMinutes((rules as any)[key])}</span>
             </div>
           </div>
         ))}
-      </div>
-
-      {/* Paramètres verrouillés DRIEETS */}
-      <div className="space-y-2">
-        <h3 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Définis par la réglementation DRIEETS</h3>
-        <div className="bg-slate-900/50 border border-slate-700 rounded-xl p-3 flex items-center justify-between">
-          <div className="text-sm text-white">Repos entre journées</div>
-          <div className="bg-slate-800/80 border border-slate-700 rounded-lg px-3 py-1.5 text-slate-400 text-sm font-mono">{formatMinutes(rules.minRestBetweenDays)}</div>
-        </div>
       </div>
       {(["maxWorkMinutes", "mandatoryBreakAfterMinutes"] as const).map(rk => (
         <div key={rk}>
@@ -1571,9 +1276,10 @@ function SettingsTab({ rules, onUpdateRules, projectName, onDelete, projectId }:
               <div className="font-semibold text-white text-xs mb-2">{BL[band]}</div>
               <div className="grid grid-cols-2 gap-3">{(["school", "vacation"] as const).map(p => (
                 <div key={p}>
-                  <div className="text-[10px] text-slate-400 block mb-1">{p === "school" ? "🏫 Scolaire" : "🌴 Vacances"}</div>
-                  <div className="bg-slate-800/80 border border-slate-600 rounded-lg px-2 py-1.5 text-slate-300 text-xs font-mono text-center">
-                    {formatMinutes(rules[rk][band][p])}
+                  <label className="text-[10px] text-slate-400 block mb-1">{p === "school" ? "🏫 Scolaire" : "🌴 Vacances"}</label>
+                  <div className="flex items-center gap-1">
+                    <input type="number" min="15" max="720" step="15" value={rules[rk][band][p]} onChange={e => setRule(`${rk}.${band}.${p}`, e.target.value)} className="w-16 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-white text-xs text-center" />
+                    <span className="text-[10px] text-slate-500">{formatMinutes(rules[rk][band][p])}</span>
                   </div>
                 </div>
               ))}</div>
@@ -1581,77 +1287,16 @@ function SettingsTab({ rules, onUpdateRules, projectName, onDelete, projectId }:
           ))}</div>
         </div>
       ))}
-
-      {/* Zone de suppression */}
-      <div className="mt-6 border border-red-900/50 rounded-xl p-4 bg-red-950/20">
-        <div className="text-xs font-semibold text-red-400 uppercase tracking-wider mb-2">Zone de danger</div>
-        {!showDeleteZone ? (
-          <button onClick={() => setShowDeleteZone(true)} className="text-xs text-red-400 border border-red-800/60 px-3 py-2 rounded-lg">🗑 Supprimer cette production…</button>
-        ) : (
-          <div className="space-y-3">
-            <div className="text-xs text-red-300">Cette action est <b>irréversible</b>. Tapez le nom exact de la production pour confirmer :</div>
-            <div className="text-xs text-slate-400 font-mono bg-slate-800/60 rounded px-3 py-2 select-all">{projectName}</div>
-            <input
-              type="text"
-              value={deleteConfirm}
-              onChange={e => setDeleteConfirm(e.target.value)}
-              placeholder="Tapez le nom ici…"
-              className="w-full bg-slate-800 border border-red-800 rounded-lg px-3 py-2.5 text-white text-sm focus:outline-none focus:border-red-500"
-            />
-            <div className="flex gap-2">
-              <button onClick={() => { setShowDeleteZone(false); setDeleteConfirm(""); }} className="flex-1 text-xs text-slate-400 border border-slate-700 px-3 py-2 rounded-lg">Annuler</button>
-              <button
-                disabled={deleteConfirm !== projectName}
-                onClick={onDelete}
-                className="flex-1 text-xs bg-red-800 disabled:opacity-30 disabled:cursor-not-allowed text-white px-3 py-2 rounded-lg font-semibold"
-              >Supprimer définitivement</button>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Historique des actions */}
-      <div className="mt-6 border border-slate-700/60 rounded-xl p-4 bg-slate-900/30">
-        <div className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-3">📋 Historique des actions</div>
-        {logsLoading ? (
-          <div className="text-xs text-slate-500 py-4 text-center">Chargement…</div>
-        ) : logs.length === 0 ? (
-          <div className="text-xs text-slate-500 py-4 text-center">Aucune action enregistrée</div>
-        ) : (
-          <div className="space-y-1 max-h-80 overflow-y-auto">
-            {logs.map((log, i) => {
-              const d = new Date(log.performed_at);
-              const dateLabel = `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-              const childName = log.children ? `${log.children.first_name} ${log.children.last_name}` : log.child_id;
-              return (
-                <div key={i} className="flex items-center gap-2 text-[10px] text-slate-400 py-1 border-b border-slate-800/60 last:border-0">
-                  <span className="text-slate-500 flex-shrink-0 w-20">{dateLabel}</span>
-                  <span className="text-slate-300 flex-1 truncate font-semibold">{childName}</span>
-                  <span className="flex-shrink-0">{log.action}</span>
-                  <span className="text-slate-600 flex-shrink-0 truncate max-w-[80px]">{log.performed_by}</span>
-                </div>
-              );
-            })}
-          </div>
-        )}
-        {(logsPage > 0 || logs.length === PAGE_SIZE) && (
-          <div className="flex gap-2 mt-3">
-            {logsPage > 0 && <button onClick={() => setLogsPage(p => p - 1)} className="text-xs text-slate-400 border border-slate-700 px-3 py-1.5 rounded-lg">← Page précédente</button>}
-            {logs.length === PAGE_SIZE && <button onClick={() => setLogsPage(p => p + 1)} className="text-xs text-slate-400 border border-slate-700 px-3 py-1.5 rounded-lg ml-auto">Page suivante →</button>}
-          </div>
-        )}
-      </div>
     </div>
   );
 }
 
-function ChildFormModal({ child, shootingDays, onSave, onClose }: { child: Child | null; shootingDays: Record<string, ShootingDay>; onSave: (d: any) => void; onClose: () => void }) {
+function ChildFormModal({ child, onSave, onClose }: { child: Child | null; onSave: (d: any) => void; onClose: () => void }) {
   const [fullName, setFullName] = useState(child ? `${child.first_name} ${child.last_name}`.trim() : "");
   const [dob, setDob] = useState(child?.dob || "");
   const [vacationPeriods, setVacationPeriods] = useState<VacationPeriod[]>(child?.vacation_periods || []);
   const [role, setRole] = useState<ChildRole | null>(child?.role || null);
   const [newVac, setNewVac] = useState({ start: "", end: "" });
-  const [vacWarnings, setVacWarnings] = useState<Record<number, string[]>>({});
   const [derogations, setDerogations] = useState<Derogation[]>(child?.derogations || []);
   const [newDerog, setNewDerog] = useState({ date: "", end_time: "" });
   const [error, setError] = useState("");
@@ -1677,42 +1322,11 @@ function ChildFormModal({ child, shootingDays, onSave, onClose }: { child: Child
         </div>
         <div>
           <label className="text-[10px] text-slate-400 uppercase tracking-wider block mb-2">Vacances <span className="text-slate-600 font-normal normal-case">(optionnel)</span></label>
-          {vacationPeriods.map((p, i) => (
-            <div key={i} className="mb-2">
-              <div className="flex items-center gap-2 text-sm text-slate-300">
-                <span>{p.start} → {p.end}</span>
-                <button onClick={() => {
-                  setVacationPeriods(v => v.filter((_, j) => j !== i));
-                  setVacWarnings(w => { const copy = { ...w }; delete copy[i]; return copy; });
-                }} className="text-red-400 w-6 h-6 flex items-center justify-center">✕</button>
-              </div>
-              {vacWarnings[i] && vacWarnings[i].length > 0 && (
-                <div className="mt-1 bg-amber-900/25 border border-amber-700/50 rounded-lg px-2 py-1.5 text-[10px] text-amber-300">
-                  ⚠ {vacWarnings[i].length} jour(s) de tournage tombent dans cette période de vacances : {vacWarnings[i].join(", ")}
-                </div>
-              )}
-            </div>
-          ))}
+          {vacationPeriods.map((p, i) => <div key={i} className="flex items-center gap-2 mb-1 text-sm text-slate-300"><span>{p.start} → {p.end}</span><button onClick={() => setVacationPeriods(v => v.filter((_, j) => j !== i))} className="text-red-400 w-6 h-6 flex items-center justify-center">✕</button></div>)}
           <div className="flex gap-2 items-end mt-2">
             <TextInput label="Début" type="date" value={newVac.start} onChange={e => setNewVac(v => ({ ...v, start: e.target.value }))} />
             <TextInput label="Fin" type="date" value={newVac.end} onChange={e => setNewVac(v => ({ ...v, end: e.target.value }))} />
-            <button onClick={() => {
-              if (newVac.start && newVac.end) {
-                const idx = vacationPeriods.length;
-                const conflictDates = Object.entries(shootingDays)
-                  .filter(([date, day]) => {
-                    if (date < newVac.start || date > newVac.end) return false;
-                    if (child && !day.child_ids.includes(child.id)) return false;
-                    return true;
-                  })
-                  .map(([date]) => new Date(date + "T12:00:00").toLocaleDateString("fr-FR", { day: "numeric", month: "short" }));
-                setVacationPeriods(v => [...v, newVac]);
-                if (conflictDates.length > 0) {
-                  setVacWarnings(w => ({ ...w, [idx]: conflictDates }));
-                }
-                setNewVac({ start: "", end: "" });
-              }
-            }} className="bg-slate-700 text-white px-3 rounded-lg h-12 text-sm">+</button>
+            <button onClick={() => { if (newVac.start && newVac.end) { setVacationPeriods(v => [...v, newVac]); setNewVac({ start: "", end: "" }); } }} className="bg-slate-700 text-white px-3 rounded-lg h-12 text-sm">+</button>
           </div>
         </div>
         {/* Dérogations horaires (travail après 20h) */}
@@ -1768,7 +1382,6 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
 }) {
   const [, setTick] = useState(0);
   const [addingChildren, setAdding] = useState(false);
-  const [pendingRemove, setPendingRemove] = useState<Child | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [actionModal, setActionModal] = useState<{ type: "start" | "pause" | "dejeuner" | "resume" | "end" } | null>(null);
   const [search, setSearch] = useState("");
@@ -1777,28 +1390,20 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
 
   useEffect(() => { const t = setInterval(() => setTick(n => n + 1), 15000); return () => clearInterval(t); }, []);
 
-  useEffect(() => {
-    if (!("wakeLock" in navigator)) return;
-    let lock: any = null;
-    (navigator as any).wakeLock.request("screen").then((l: any) => { lock = l; }).catch(() => {});
-    const reacquire = () => { if (document.visibilityState === "visible") (navigator as any).wakeLock.request("screen").then((l: any) => { lock = l; }).catch(() => {}); };
-    document.addEventListener("visibilitychange", reacquire);
-    return () => { document.removeEventListener("visibilitychange", reacquire); lock?.release(); };
-  }, []);
-
   const day = project.shootingDays[dateStr] || { child_ids: [], sessions: {} };
   const childIds = day.child_ids || [];
   const sessions = day.sessions || {};
   const rules = project.rules;
   const dateLabel = new Date(dateStr + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-  const childrenInDay = sortByRoleThenAlpha(childIds.map(id => project.children.find(c => c.id === id)).filter(Boolean) as Child[]);
+  const childrenInDay = childIds.map(id => project.children.find(c => c.id === id)).filter(Boolean) as Child[];
   const rolesPresent = ALL_ROLES.filter(r => childrenInDay.some(c => c.role === r));
 
-  const filteredIds = childrenInDay.filter(c => {
+  const filteredIds = childIds.filter(id => {
+    const c = project.children.find(ch => ch.id === id); if (!c) return false;
     if (search.trim()) { const q = normalize(search); if (!normalize(`${c.first_name} ${c.last_name}`).includes(q) && !normalize(`${c.last_name} ${c.first_name}`).includes(q)) return false; }
-    if (roleTab !== "all" && c.role !== roleTab) return false;
-    return true;
-  }).map(c => c.id);
+    if (roleTab === "all") return true;
+    return c.role === roleTab;
+  });
 
   function toggleSelect(id: string) { setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }); }
   const selList = [...selected];
@@ -1872,22 +1477,13 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
                 </div>
               )}
               <div className="text-[10px] text-slate-400 uppercase tracking-wider mb-2">Individuellement</div>
-              <div className="space-y-0.5">{project.children.filter(c => !c.archived).map(c => {
-                const isInDay = childIds.includes(c.id);
-                const hasSession = isInDay && !!sessions[c.id]?.start_time;
-                return (
-                  <label key={c.id} className="flex items-center gap-3 py-2.5 cursor-pointer">
-                    <input type="checkbox" className="accent-blue-500 w-5 h-5" checked={isInDay}
-                      onChange={() => {
-                        if (isInDay) { setPendingRemove(c); }
-                        else { onToggleChild(c.id); }
-                      }} />
-                    <span className="text-sm text-slate-200 flex-1">{c.first_name} {c.last_name}</span>
-                    {c.role && <RoleBadge role={c.role} />}
-                    {hasSession && <span className="text-[10px] text-amber-400">● données</span>}
-                  </label>
-                );
-              })}</div>
+              <div className="space-y-0.5">{project.children.filter(c => !c.archived).map(c => (
+                <label key={c.id} className="flex items-center gap-3 py-2.5 cursor-pointer">
+                  <input type="checkbox" className="accent-blue-500 w-5 h-5" checked={childIds.includes(c.id)} onChange={() => onToggleChild(c.id)} />
+                  <span className="text-sm text-slate-200 flex-1">{c.first_name} {c.last_name}</span>
+                  {c.role && <RoleBadge role={c.role} />}
+                </label>
+              ))}</div>
             </div>
           )}
         </div>
@@ -1942,30 +1538,6 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
           setActionModal(null);
         }}
         onClose={() => setActionModal(null)} />}
-
-      {pendingRemove && (
-        <Modal title="Retirer de la journée ?" onClose={() => setPendingRemove(null)}>
-          <div className="space-y-4">
-            {sessions[pendingRemove.id]?.start_time ? (
-              <div className="bg-red-900/30 border border-red-700 rounded-lg px-4 py-3 text-sm text-red-300">
-                🚫 <b>{pendingRemove.first_name} {pendingRemove.last_name}</b> a des données enregistrées pour cette journée.<br />
-                <span className="text-xs mt-1 block text-red-400">Les heures de travail, pauses et événements seront définitivement perdus.</span>
-              </div>
-            ) : (
-              <div className="bg-slate-800/60 border border-slate-600 rounded-lg px-4 py-3 text-sm text-slate-300">
-                Retirer <b>{pendingRemove.first_name} {pendingRemove.last_name}</b> de cette journée de tournage ?
-              </div>
-            )}
-            <div className="flex gap-3">
-              <Btn variant="ghost" className="flex-1" onClick={() => setPendingRemove(null)}>Annuler</Btn>
-              <button onClick={() => { onToggleChild(pendingRemove.id); setPendingRemove(null); }}
-                className={`flex-1 py-3 rounded-xl font-bold text-sm ${sessions[pendingRemove.id]?.start_time ? "bg-red-700" : "bg-slate-600"} text-white`}>
-                Retirer
-              </button>
-            </div>
-          </div>
-        </Modal>
-      )}
     </div>
   );
 }
@@ -2031,13 +1603,7 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
   const derogation = (child.derogations || []).find(d => d.date === dateStr);
   const limitTimeStr = derogation ? derogation.end_time : "20:00";
   const limitDate = new Date(`${dateStr}T${limitTimeStr}:00`);
-  const limit20h = new Date(`${dateStr}T20:00:00`);
   const pastTimeLimit = session?.start_time != null && session.status !== "done" && new Date() >= limitDate;
-  // Dépassement 20h sans dérogation (session en cours OU terminée après 20h)
-  const past20hNoDerog = !derogation && session?.start_time != null && (
-    (session.status !== "done" && new Date() >= limit20h) ||
-    (session.status === "done" && session.end_time != null && new Date(session.end_time) > limit20h)
-  );
 
   function startEdit(key: number | "start" | "end", iso: string | undefined) { setEditingIdx(key); setEditTime(isoToTimeStr(iso)); }
   function confirmEdit() {
@@ -2070,8 +1636,7 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
             {ampCrit && <span className="text-[10px] text-red-400">🚫 Ampl.</span>}
             {ampWarn && !ampCrit && <span className="text-[10px] text-orange-400">⚠️ Ampl.</span>}
             {breakDue && !workCrit && <span className="text-[10px] text-amber-400">⚠️ Pause</span>}
-            {past20hNoDerog && <span className="text-[10px] text-red-400">🚫 20h</span>}
-            {pastTimeLimit && !past20hNoDerog && <span className="text-[10px] text-orange-400">🕗 {limitTimeStr} dépassé</span>}
+            {pastTimeLimit && <span className="text-[10px] text-orange-400">🕗 {limitTimeStr} dépassé</span>}
           </div>
         </div>
         {/* Mini progress bars */}
@@ -2107,8 +1672,7 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
               {workCrit && <div className="bg-red-900/30 border border-red-700 rounded-lg px-3 py-2 text-xs text-red-300">🚫 Temps de travail maximum dépassé</div>}
               {ampWarn && !ampCrit && <div className="bg-orange-900/30 border border-orange-600 rounded-lg px-3 py-2 text-xs text-orange-300">⚠️ Amplitude maximale atteinte</div>}
               {ampCrit && <div className="bg-red-900/30 border border-red-700 rounded-lg px-3 py-2 text-xs text-red-300">🚫 Amplitude maximale dépassée</div>}
-              {past20hNoDerog && <div className="bg-red-900/30 border border-red-700 rounded-lg px-3 py-2 text-xs text-red-300">🚫 Dépassement 20h — aucune dérogation enregistrée</div>}
-              {pastTimeLimit && !past20hNoDerog && <div className="bg-orange-900/30 border border-orange-600 rounded-lg px-3 py-2 text-xs text-orange-300">🕗 Limite horaire {limitTimeStr} dépassée (dérogation)</div>}
+              {pastTimeLimit && <div className="bg-orange-900/30 border border-orange-600 rounded-lg px-3 py-2 text-xs text-orange-300">🕗 Limite horaire {limitTimeStr} dépassée{derogation ? " (dérogation)" : ""}</div>}
 
               {/* Boutons d'action individuels */}
               {session?.status !== "done" && (
@@ -2165,376 +1729,6 @@ function TimelineRow({ label, iso, isEditing, editTime, onEdit, onTimeChange, on
       ) : (
         <button onClick={onEdit} className="text-blue-300 hover:underline">{formatTime(iso)}</button>
       )}
-    </div>
-  );
-}
-
-// ─── Offline banner ────────────────────────────────────────────────────────────
-function OfflineBanner() {
-  return (
-    <div className="bg-amber-900/80 border-b border-amber-700 px-4 py-2 flex items-center gap-2 text-amber-200 text-xs">
-      <span>📡</span>
-      <span>Mode hors-ligne — données en lecture seule. Les modifications reprendront dès le retour du réseau.</span>
-    </div>
-  );
-}
-
-// ─── Share modal ───────────────────────────────────────────────────────────────
-function ShareModal({ project, onGenerateToken, onClose }: { project: Project; onGenerateToken: () => Promise<string>; onClose: () => void }) {
-  const [token, setToken] = useState(project.share_token || "");
-  const [loading, setLoading] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [password, setPassword] = useState(project.share_password || "");
-  const [pwSaved, setPwSaved] = useState(false);
-  const [pwSaving, setPwSaving] = useState(false);
-  const shareUrl = token ? `${window.location.origin}?share=${token}` : "";
-
-  async function generate() {
-    setLoading(true);
-    const t = await onGenerateToken();
-    setToken(t);
-    setLoading(false);
-  }
-
-  function copyLink() {
-    navigator.clipboard.writeText(shareUrl);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }
-
-  async function savePassword() {
-    setPwSaving(true);
-    await supabase.from("projects").update({ share_password: password || null }).eq("id", project.id);
-    setPwSaving(false);
-    setPwSaved(true);
-    setTimeout(() => setPwSaved(false), 2000);
-  }
-
-  return (
-    <Modal title="Partager en lecture seule" onClose={onClose}>
-      <div className="space-y-4">
-        <div className="text-xs text-slate-400">
-          Générez un lien pour partager ce projet en <b className="text-white">lecture seule</b> avec un réalisateur ou directeur de production. Aucun compte requis.
-        </div>
-        {!token ? (
-          <button onClick={generate} disabled={loading} className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white py-3 rounded-xl font-bold text-sm">
-            {loading ? "Génération…" : "🔗 Générer le lien de partage"}
-          </button>
-        ) : (
-          <div className="space-y-3">
-            <div className="bg-slate-800/80 border border-slate-600 rounded-lg px-3 py-2 text-xs text-blue-300 break-all font-mono">{shareUrl}</div>
-            <div className="flex gap-2">
-              <button onClick={copyLink} className={`flex-1 py-3 rounded-xl font-bold text-sm transition-colors ${copied ? "bg-emerald-700 text-white" : "bg-slate-700 hover:bg-slate-600 text-white"}`}>
-                {copied ? "✓ Lien copié !" : "📋 Copier le lien"}
-              </button>
-              <button onClick={generate} disabled={loading} className="py-3 px-3 rounded-xl text-xs text-slate-400 hover:text-white border border-slate-700 hover:border-slate-500 transition-colors" title="Regénérer un nouveau lien">
-                {loading ? "…" : "🔄"}
-              </button>
-            </div>
-            <div className="border-t border-slate-700 pt-3">
-              <div className="text-xs text-slate-300 font-semibold mb-1.5">🔒 Mot de passe (optionnel)</div>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={password}
-                  onChange={e => setPassword(e.target.value)}
-                  placeholder="Laisser vide = sans mot de passe"
-                  className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-blue-500"
-                />
-                <button onClick={savePassword} disabled={pwSaving} className={`px-3 py-2 rounded-lg text-xs font-bold transition-colors ${pwSaved ? "bg-emerald-700 text-white" : "bg-slate-700 hover:bg-slate-600 text-white"}`}>
-                  {pwSaved ? "✓" : pwSaving ? "…" : "Sauver"}
-                </button>
-              </div>
-              <div className="text-[10px] text-slate-500 mt-1">Si défini, les visiteurs devront saisir ce mot de passe pour accéder au projet.</div>
-            </div>
-          </div>
-        )}
-        <Btn variant="ghost" className="w-full" onClick={onClose}>Fermer</Btn>
-      </div>
-    </Modal>
-  );
-}
-
-// ─── Shared project view (read-only, no auth required) ────────────────────────
-function SharedProjectView({ token }: { token: string }) {
-  const [project, setProject] = useState<Project | null>(null);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [needsPassword, setNeedsPassword] = useState(false);
-  const [pwInput, setPwInput] = useState("");
-  const [pwError, setPwError] = useState("");
-  const [pwChecking, setPwChecking] = useState(false);
-
-  async function loadProject(password?: string) {
-    const params: any = { p_token: token };
-    if (password) params.p_password = password;
-    const { data, error: e } = await supabase.rpc("get_project_by_token", params);
-    if (e || !data) { setError("Lien invalide ou expiré."); setLoading(false); setPwChecking(false); return; }
-    if (data.error === "password_required") {
-      setNeedsPassword(true); setLoading(false); setPwChecking(false);
-      if (password) setPwError("Mot de passe incorrect.");
-      return;
-    }
-    const shootingDays: Record<string, ShootingDay> = {};
-    Object.entries(data.shootingDays || {}).forEach(([date, d]: [string, any]) => { shootingDays[date] = d; });
-    const mappedChildren = (data.children || []).map((c: any) => ({ ...c, role: c.child_role ?? undefined }));
-    setProject({ ...data.project, children: mappedChildren, groups: data.groups || [], shootingDays });
-    setNeedsPassword(false); setLoading(false); setPwChecking(false);
-  }
-
-  useEffect(() => { loadProject(); }, [token]);
-
-  function submitPassword(e: React.FormEvent) {
-    e.preventDefault();
-    if (!pwInput.trim()) return;
-    setPwError(""); setPwChecking(true);
-    loadProject(pwInput.trim());
-  }
-
-  if (loading) return <div className="min-h-screen bg-[#080d16] flex items-center justify-center"><div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" /></div>;
-
-  if (needsPassword) return (
-    <div className="min-h-screen bg-[#080d16] flex items-center justify-center px-4" style={{ fontFamily: "'DM Mono', monospace" }}>
-      <div className="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl p-6">
-        <h1 className="text-xl font-extrabold mb-1 text-center" style={{ fontFamily: "Syne, sans-serif" }}><span className="text-white">KIDS</span><span className="text-blue-500">TIME</span></h1>
-        <div className="text-center text-sm text-slate-400 mb-5">Ce projet est protégé par un mot de passe.</div>
-        <form onSubmit={submitPassword} className="space-y-3">
-          <input
-            type="password"
-            value={pwInput}
-            onChange={e => { setPwInput(e.target.value); setPwError(""); }}
-            placeholder="Mot de passe"
-            autoFocus
-            className="w-full bg-slate-800 border border-slate-600 rounded-xl px-4 py-3 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-blue-500"
-          />
-          {pwError && <div className="text-xs text-red-400">{pwError}</div>}
-          <button type="submit" disabled={pwChecking || !pwInput.trim()} className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white py-3 rounded-xl font-bold text-sm">
-            {pwChecking ? "Vérification…" : "Accéder au projet"}
-          </button>
-        </form>
-      </div>
-    </div>
-  );
-
-  if (error || !project) return (
-    <div className="min-h-screen bg-[#080d16] flex items-center justify-center px-4" style={{ fontFamily: "'DM Mono', monospace" }}>
-      <div className="text-center"><div className="text-red-400 text-4xl mb-4">⚠️</div><div className="text-white font-bold mb-2">{error || "Erreur"}</div><div className="text-slate-400 text-sm">Ce lien de partage est invalide ou a expiré.</div></div>
-    </div>
-  );
-  return <ReadOnlyView project={project} />;
-}
-
-// ─── Read-only view ───────────────────────────────────────────────────────────
-function ReadOnlyView({ project }: { project: Project }) {
-  const sortedDates = Object.keys(project.shootingDays).sort();
-  const [tab, setTab] = useState<"calendar" | "children">("calendar");
-  const [openDate, setOpenDate] = useState<string | null>(null);
-  const [openChild, setOpenChild] = useState<string | null>(null);
-  const [calCur, setCalCur] = useState(() => {
-    if (sortedDates.length > 0) { const d = new Date(sortedDates[0] + "T12:00:00"); return new Date(d.getFullYear(), d.getMonth(), 1); }
-    const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), 1);
-  });
-  const [roleTab, setRoleTab] = useState<ChildRole | "all">("all");
-  const MN = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
-  const DN = ["L","M","M","J","V","S","D"];
-  const activeChildren = project.children.filter(c => !c.archived);
-  const rolesPresent = ALL_ROLES.filter(r => activeChildren.some(c => c.role === r));
-  const displayChildren = sortByRoleThenAlpha(roleTab === "all" ? activeChildren : activeChildren.filter(c => c.role === roleTab));
-
-  return (
-    <div className="min-h-screen bg-[#080d16] text-white pb-10" style={{ fontFamily: "'DM Mono', monospace" }}>
-      <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@700;800&display=swap" rel="stylesheet" />
-      <div className="bg-blue-900/30 border-b border-blue-800 px-4 py-2 flex items-center gap-2 text-blue-300 text-xs">
-        <span>👁</span><span>Mode consultation — lecture seule · KidsTime · ACMA Fiction</span>
-      </div>
-      <div className="max-w-2xl mx-auto px-4 py-6">
-        <h1 className="text-2xl font-extrabold mb-1" style={{ fontFamily: "Syne, sans-serif" }}><span className="text-white">KIDS</span><span className="text-blue-500">TIME</span></h1>
-        <h2 className="text-lg font-bold text-white mb-1">{project.name}</h2>
-        <div className="text-xs text-slate-400 mb-4">{project.children.length} enfant(s) · {sortedDates.length} jour(s) de tournage</div>
-
-        {/* Tabs */}
-        <div className="flex gap-1 mb-5 bg-slate-900/60 p-1 rounded-xl border border-slate-800">
-          {([["calendar", "📅 Calendrier"], ["children", "👦 Enfants"]] as const).map(([key, label]) => (
-            <button key={key} onClick={() => setTab(key)} className={`flex-1 py-2 rounded-lg text-xs font-semibold transition-colors ${tab === key ? "bg-blue-600 text-white" : "text-slate-400 hover:text-white"}`}>{label}</button>
-          ))}
-        </div>
-
-        {tab === "calendar" && (() => {
-          const y = calCur.getFullYear(), m = calCur.getMonth();
-          const firstDay = (new Date(y, m, 1).getDay() + 6) % 7, daysInMonth = new Date(y, m + 1, 0).getDate();
-          const cells = [...Array(firstDay).fill(null), ...Array.from({ length: daysInMonth }, (_, i) => i + 1)];
-          function ds(d: number) { return `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`; }
-          return (
-            <div>
-              <div className="flex items-center justify-between mb-4">
-                <button onClick={() => setCalCur(new Date(y, m - 1, 1))} className="text-slate-400 w-10 h-10 rounded-lg border border-slate-700 flex items-center justify-center text-lg">‹</button>
-                <h2 className="font-bold text-base" style={{ fontFamily: "Syne, sans-serif" }}>{MN[m]} {y}</h2>
-                <button onClick={() => setCalCur(new Date(y, m + 1, 1))} className="text-slate-400 w-10 h-10 rounded-lg border border-slate-700 flex items-center justify-center text-lg">›</button>
-              </div>
-              <div className="grid grid-cols-7 gap-1 mb-1">{DN.map((d, i) => <div key={i} className="text-center text-[10px] text-slate-500 py-1 uppercase tracking-wider">{d}</div>)}</div>
-              <div className="grid grid-cols-7 gap-1 mb-4">
-                {cells.map((d, i) => {
-                  if (!d) return <div key={i} />;
-                  const s = ds(d);
-                  const dayData = project.shootingDays[s];
-                  const count = (dayData?.child_ids || []).filter(id => project.children.find(c => c.id === id)).length;
-                  const isShoot = count > 0, isToday = s === todayStr(), isOpen = openDate === s;
-                  const hasAlert = isShoot && (dayData.child_ids || []).some(id => {
-                    const child = project.children.find(c => c.id === id); if (!child) return false;
-                    const session = dayData.sessions?.[id];
-                    const vacation = isVacation(child, s);
-                    const band = getAgeBand(child.dob);
-                    const period: Period = vacation ? "vacation" : "school";
-                    const stats = computeSessionStats(session, project.rules);
-                    return stats && (stats.workMin > project.rules.maxWorkMinutes[band][period] || stats.amplitudeMin > project.rules.maxAmplitudeMinutes);
-                  });
-                  return (
-                    <button key={i} onClick={() => isShoot ? setOpenDate(isOpen ? null : s) : undefined}
-                      className={`rounded-xl py-2.5 text-sm transition-all ${isShoot ? `cursor-pointer ${isOpen ? "bg-blue-700/60 border-blue-400" : "bg-blue-900/50 border-blue-600"} border text-blue-200` : "bg-slate-900/40 border border-slate-800 text-slate-600 cursor-default"} ${isToday ? "ring-2 ring-blue-400" : ""}`}>
-                      <div className="font-bold text-sm">{d}</div>
-                      {isShoot && <div className="text-[9px] text-blue-400">{count}👦</div>}
-                      {hasAlert && <div className="text-[9px] text-red-400">⚠</div>}
-                    </button>
-                  );
-                })}
-              </div>
-              {openDate && project.shootingDays[openDate] && (() => {
-                const day = project.shootingDays[openDate];
-                const dateLabel = new Date(openDate + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
-                const childrenInDay = sortByRoleThenAlpha((day.child_ids || []).map(id => project.children.find(c => c.id === id)).filter(Boolean) as Child[]);
-                return (
-                  <div className="border border-blue-700/50 rounded-xl overflow-hidden">
-                    <div className="px-4 py-3 bg-blue-900/30 border-b border-blue-700/30">
-                      <div className="font-bold text-white text-sm capitalize">{dateLabel}</div>
-                      <div className="text-[10px] text-blue-300">{childrenInDay.length} enfant(s) · cliquez sur un jour pour fermer</div>
-                    </div>
-                    <div className="p-3 space-y-3">
-                      {childrenInDay.map(child => {
-                        const session = day.sessions?.[child.id];
-                        const vacation = isVacation(child, openDate);
-                        const band = getAgeBand(child.dob);
-                        const period: Period = vacation ? "vacation" : "school";
-                        const maxWork = project.rules.maxWorkMinutes[band][period];
-                        const maxAmp = project.rules.maxAmplitudeMinutes;
-                        const stats = computeSessionStats(session, project.rules);
-                        const workOver = stats ? stats.workMin > maxWork : false;
-                        const ampOver = stats ? stats.amplitudeMin > maxAmp : false;
-                        const ampWarn = stats ? stats.amplitudeMin === maxAmp : false;
-                        const pauseSlots = stats?.breakSlots.filter(b => b.valid && b.kind === "pause") || [];
-                        const dejSlots = stats?.breakSlots.filter(b => b.kind === "dejeuner") || [];
-                        return (
-                          <div key={child.id} className="bg-slate-800/50 rounded-xl p-3 space-y-2">
-                            <div className="flex items-center gap-2">
-                              <div className="w-7 h-7 rounded-full bg-blue-900/60 flex items-center justify-center text-blue-300 font-bold text-[10px] flex-shrink-0">{child.first_name?.[0]}{child.last_name?.[0]}</div>
-                              <div className="flex-1">
-                                <div className="text-sm font-semibold text-white">{child.first_name} {child.last_name}</div>
-                                <div className="flex items-center gap-2"><div className="text-[10px] text-slate-400">{getAge(child.dob)} ans{vacation ? " · 🌴 Vacances" : ""}</div>{child.role && <RoleBadge role={child.role} />}</div>
-                              </div>
-                            </div>
-                            {session?.start_time ? (
-                              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[10px] pt-1 border-t border-slate-700">
-                                <div className="text-slate-400">Convocation</div><div className="text-white font-medium">{formatTime(session.start_time)}</div>
-                                <div className="text-slate-400">Fin</div><div className="text-white font-medium">{session.end_time ? formatTime(session.end_time) : <span className="text-blue-400">en cours</span>}</div>
-                                <div className="text-slate-400">Travail</div>
-                                <div className={`font-semibold ${workOver ? "text-red-400" : "text-emerald-400"}`}>{stats ? formatMinutes(stats.workMin) : "--"} <span className="text-slate-500 font-normal">/ {formatMinutes(maxWork)}</span>{workOver && <span className="text-red-400 ml-1">⚠ +{formatMinutes(stats!.workMin - maxWork)}</span>}</div>
-                                <div className="text-slate-400">Amplitude</div>
-                                <div className={`font-semibold ${ampOver ? "text-red-400" : ampWarn ? "text-orange-400" : "text-slate-300"}`}>{stats ? formatMinutes(stats.amplitudeMin) : "--"} <span className="text-slate-500 font-normal">/ {formatMinutes(maxAmp)}</span>{ampOver && <span className="text-red-400 ml-1">⚠ +{formatMinutes(stats!.amplitudeMin - maxAmp)}</span>}</div>
-                                {stats && stats.dejeunerMin > 0 && <><div className="text-slate-400">🍽 Déjeuner</div><div className="text-slate-300">{formatMinutes(stats.dejeunerMin)}{dejSlots.length > 0 && <span className="text-slate-500 ml-1">({dejSlots.map(s => `${formatTime(s.start)}→${formatTime(s.end)}`).join(", ")})</span>}</div></>}
-                                {stats && stats.validBreakMin > 0 && <><div className="text-slate-400">Pauses</div><div className="text-slate-300">{formatMinutes(stats.validBreakMin)}{pauseSlots.length > 0 && <span className="text-slate-500 ml-1">({pauseSlots.map(s => `${formatTime(s.start)}→${formatTime(s.end)}`).join(", ")})</span>}</div></>}
-                              </div>
-                            ) : <div className="text-[10px] text-slate-500 pt-1 border-t border-slate-700">Non démarré</div>}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                );
-              })()}
-            </div>
-          );
-        })()}
-
-        {tab === "children" && (
-          <div>
-            {rolesPresent.length > 0 && (
-              <div className="flex gap-0 border-b border-slate-800 mb-3 overflow-x-auto">
-                <button onClick={() => setRoleTab("all")} className={`px-3 py-2 text-xs whitespace-nowrap transition-colors border-b-2 ${roleTab === "all" ? "border-blue-500 text-white" : "border-transparent text-slate-500"}`}>Tous ({activeChildren.length})</button>
-                {rolesPresent.map(r => <button key={r} onClick={() => setRoleTab(r)} className={`px-3 py-2 text-xs whitespace-nowrap transition-colors border-b-2 ${roleTab === r ? "border-blue-500 text-white" : "border-transparent text-slate-500"}`}>{ROLE_LABELS[r]} ({activeChildren.filter(c => c.role === r).length})</button>)}
-              </div>
-            )}
-            <div className="space-y-2">
-              {displayChildren.map(child => {
-                const band = getAgeBand(child.dob);
-                const daysPresent = sortedDates.filter(d => (project.shootingDays[d].child_ids || []).includes(child.id));
-                const isOpen = openChild === child.id;
-                const hasAlert = daysPresent.some(dateStr => {
-                  const session = project.shootingDays[dateStr].sessions?.[child.id];
-                  const vacation = isVacation(child, dateStr);
-                  const period: Period = vacation ? "vacation" : "school";
-                  const stats = computeSessionStats(session, project.rules);
-                  return stats && (stats.workMin > project.rules.maxWorkMinutes[band][period] || stats.amplitudeMin > project.rules.maxAmplitudeMinutes);
-                });
-                return (
-                  <div key={child.id} className="border border-slate-700 rounded-xl overflow-hidden">
-                    <button onClick={() => setOpenChild(isOpen ? null : child.id)} className="w-full flex items-center gap-3 px-4 py-3 bg-slate-900/50 hover:bg-slate-800/60 transition-colors text-left">
-                      <div className="w-9 h-9 rounded-full bg-blue-900/60 flex items-center justify-center text-blue-300 font-bold text-sm flex-shrink-0">{child.first_name?.[0]}{child.last_name?.[0]}</div>
-                      <div className="flex-1 min-w-0">
-                        <div className="font-semibold text-white">{child.first_name} {child.last_name}</div>
-                        <div className="flex items-center gap-2 mt-0.5">
-                          <span className="text-[10px] text-slate-400">{getAge(child.dob)} ans · {band} ans · {daysPresent.length} jour(s)</span>
-                          {child.role && <RoleBadge role={child.role} />}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2 flex-shrink-0">
-                        {hasAlert && <span className="text-red-400 text-xs">⚠</span>}
-                        <span className="text-slate-500 text-xs">{isOpen ? "▲" : "▼"}</span>
-                      </div>
-                    </button>
-                    {isOpen && daysPresent.length > 0 && (
-                      <div className="p-3 space-y-2 bg-slate-900/20">
-                        {daysPresent.map(dateStr => {
-                          const day = project.shootingDays[dateStr];
-                          const session = day.sessions?.[child.id];
-                          const vacation = isVacation(child, dateStr);
-                          const period: Period = vacation ? "vacation" : "school";
-                          const maxWork = project.rules.maxWorkMinutes[band][period];
-                          const maxAmp = project.rules.maxAmplitudeMinutes;
-                          const stats = computeSessionStats(session, project.rules);
-                          const workOver = stats ? stats.workMin > maxWork : false;
-                          const ampOver = stats ? stats.amplitudeMin > maxAmp : false;
-                          const ampWarn = stats ? stats.amplitudeMin === maxAmp : false;
-                          const pauseSlots = stats?.breakSlots.filter(b => b.valid && b.kind === "pause") || [];
-                          const dejSlots = stats?.breakSlots.filter(b => b.kind === "dejeuner") || [];
-                          const dateLabel = new Date(dateStr + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
-                          return (
-                            <div key={dateStr} className="bg-slate-800/50 rounded-xl p-3 space-y-2">
-                              <div className="text-xs font-semibold text-blue-300 capitalize">{dateLabel}{vacation ? " · 🌴 Vacances" : ""}</div>
-                              {session?.start_time ? (
-                                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[10px]">
-                                  <div className="text-slate-400">Convocation</div><div className="text-white font-medium">{formatTime(session.start_time)}</div>
-                                  <div className="text-slate-400">Fin</div><div className="text-white font-medium">{session.end_time ? formatTime(session.end_time) : <span className="text-blue-400">en cours</span>}</div>
-                                  <div className="text-slate-400">Travail</div>
-                                  <div className={`font-semibold ${workOver ? "text-red-400" : "text-emerald-400"}`}>{stats ? formatMinutes(stats.workMin) : "--"} <span className="text-slate-500 font-normal">/ {formatMinutes(maxWork)}</span>{workOver && <span className="text-red-400 ml-1">⚠ +{formatMinutes(stats!.workMin - maxWork)}</span>}</div>
-                                  <div className="text-slate-400">Amplitude</div>
-                                  <div className={`font-semibold ${ampOver ? "text-red-400" : ampWarn ? "text-orange-400" : "text-slate-300"}`}>{stats ? formatMinutes(stats.amplitudeMin) : "--"} <span className="text-slate-500 font-normal">/ {formatMinutes(maxAmp)}</span>{ampOver && <span className="text-red-400 ml-1">⚠ +{formatMinutes(stats!.amplitudeMin - maxAmp)}</span>}</div>
-                                  {stats && stats.dejeunerMin > 0 && <><div className="text-slate-400">🍽 Déjeuner</div><div className="text-slate-300">{formatMinutes(stats.dejeunerMin)}{dejSlots.length > 0 && <span className="text-slate-500 ml-1">({dejSlots.map(s => `${formatTime(s.start)}→${formatTime(s.end)}`).join(", ")})</span>}</div></>}
-                                  {stats && stats.validBreakMin > 0 && <><div className="text-slate-400">Pauses</div><div className="text-slate-300">{formatMinutes(stats.validBreakMin)}{pauseSlots.length > 0 && <span className="text-slate-500 ml-1">({pauseSlots.map(s => `${formatTime(s.start)}→${formatTime(s.end)}`).join(", ")})</span>}</div></>}
-                                </div>
-                              ) : <div className="text-[10px] text-slate-500">Non démarré</div>}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        <div className="mt-8 text-center text-[10px] text-slate-600">KidsTime · Éléonore Aguillon · ACMA Fiction</div>
-      </div>
     </div>
   );
 }
