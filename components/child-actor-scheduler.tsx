@@ -8,11 +8,11 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-type Period = "school" | "vacation";
-type AgeBand = "0-2" | "3-5" | "6-11" | "12-16";
-type ChildRole = "role" | "silhouette" | "figurant";
+export type Period = "school" | "vacation";
+export type AgeBand = "0-2" | "3-5" | "6-11" | "12-16";
+export type ChildRole = "role" | "silhouette" | "figurant";
 
-interface Rules {
+export interface Rules {
   maxWorkMinutes: Record<AgeBand, Record<Period, number>>;
   mandatoryBreakAfterMinutes: Record<AgeBand, Record<Period, number>>;
   maxAmplitudeMinutes: number;
@@ -21,10 +21,10 @@ interface Rules {
   maxDaysPerWeek: number;
 }
 
-interface VacationPeriod { start: string; end: string; }
-interface Derogation { date: string; end_time: string; } // ex: { date: "2025-04-21", end_time: "23:00" }
+export interface VacationPeriod { start: string; end: string; }
+export interface Derogation { date: string; end_time: string; } // ex: { date: "2025-04-21", end_time: "23:00" }
 
-interface Child {
+export interface Child {
   id: string;
   project_id: string;
   first_name: string;
@@ -36,23 +36,23 @@ interface Child {
   derogations?: Derogation[];
 }
 
-interface Group {
+export interface Group {
   id: string;
   project_id: string;
   name: string;
   child_ids: string[];
 }
 
-interface SessionEvent { type: "pause_start" | "pause_end" | "dejeuner_start" | "dejeuner_end"; time: string; }
+export interface SessionEvent { type: "pause_start" | "pause_end" | "dejeuner_start" | "dejeuner_end"; time: string; }
 
-interface Session {
+export interface Session {
   start_time?: string;
   end_time?: string;
   status?: "working" | "paused" | "dejeuner" | "done";
   events?: SessionEvent[];
 }
 
-interface ShootingDay {
+export interface ShootingDay {
   id: string;
   project_id: string;
   date: string;
@@ -60,7 +60,7 @@ interface ShootingDay {
   sessions: Record<string, Session>;
 }
 
-interface Project {
+export interface Project {
   id: string;
   user_id: string;
   name: string;
@@ -73,7 +73,7 @@ interface Project {
   share_password?: string | null;
 }
 
-interface SessionStats {
+export interface SessionStats {
   amplitudeMin: number;
   workMin: number;
   breakMin: number;
@@ -105,36 +105,36 @@ const DEFAULT_RULES: Rules = {
 };
 
 const AGE_BANDS: AgeBand[] = ["0-2", "3-5", "6-11", "12-16"];
-const ROLE_LABELS: Record<ChildRole, string> = { role: "Rôle", silhouette: "Silhouette", figurant: "Figurant·e" };
-const ROLE_COLORS: Record<ChildRole, string> = {
+export const ROLE_LABELS: Record<ChildRole, string> = { role: "Rôle", silhouette: "Silhouette", figurant: "Figurant·e" };
+export const ROLE_COLORS: Record<ChildRole, string> = {
   role:       "bg-purple-900/40 text-purple-300 border-purple-700",
   silhouette: "bg-cyan-900/40 text-cyan-300 border-cyan-700",
   figurant:   "bg-orange-900/40 text-orange-300 border-orange-700",
 };
-const ALL_ROLES: ChildRole[] = ["role", "silhouette", "figurant"];
+export const ALL_ROLES: ChildRole[] = ["role", "silhouette", "figurant"];
 
-function getAge(dob: string): number {
+export function getAge(dob: string): number {
   const t = new Date(), b = new Date(dob);
   let a = t.getFullYear() - b.getFullYear();
   const m = t.getMonth() - b.getMonth();
   if (m < 0 || (m === 0 && t.getDate() < b.getDate())) a--;
   return a;
 }
-function getAgeBand(dob: string): AgeBand {
+export function getAgeBand(dob: string): AgeBand {
   const a = getAge(dob);
   if (a < 3) return "0-2"; if (a < 6) return "3-5"; if (a < 12) return "6-11"; return "12-16";
 }
-function formatMinutes(min: number | null | undefined): string {
+export function formatMinutes(min: number | null | undefined): string {
   if (min == null || isNaN(min)) return "0min";
   const h = Math.floor(Math.abs(min) / 60), m = Math.abs(min) % 60, s = min < 0 ? "-" : "";
   if (h === 0) return `${s}${m}min`; if (m === 0) return `${s}${h}h`;
   return `${s}${h}h${String(m).padStart(2, "0")}`;
 }
-function formatTime(v: string | Date | undefined): string {
+export function formatTime(v: string | Date | undefined): string {
   if (!v) return "--:--";
   return new Date(v).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
 }
-function isVacation(child: Child, dateStr: string): boolean {
+export function isVacation(child: Child, dateStr: string): boolean {
   return (child.vacation_periods || []).some(p => dateStr >= p.start && dateStr <= p.end);
 }
 function todayStr(): string { return new Date().toISOString().slice(0, 10); }
@@ -186,7 +186,7 @@ function guessColumn(headers: string[], candidates: string[]): string | null {
   }
   return null;
 }
-function computeSessionStats(session: Session | undefined, rules: Rules): SessionStats | null {
+export function computeSessionStats(session: Session | undefined, rules: Rules): SessionStats | null {
   if (!session?.start_time) return null;
   const now = session.end_time ? new Date(session.end_time) : new Date();
   const start = new Date(session.start_time);
@@ -229,7 +229,7 @@ function computeSessionStats(session: Session | undefined, rules: Rules): Sessio
 }
 
 // ─── Export helpers ──────────────────────────────────────────────────────────
-function buildExportRows(project: Project, dateStr: string) {
+export function buildExportRows(project: Project, dateStr: string) {
   const day = project.shootingDays[dateStr]; if (!day) return [];
   const rows: any[] = [];
   for (const childId of day.child_ids || []) {
@@ -269,7 +269,7 @@ function buildExportRows(project: Project, dateStr: string) {
   return rows;
 }
 
-function exportDayToXLSX(project: Project, dateStr: string) {
+export function exportDayToXLSX(project: Project, dateStr: string) {
   const day = project.shootingDays[dateStr]; if (!day) return;
   const allRows = buildExportRows(project, dateStr);
   const clean = (rows: any[]) => rows.map(r => { const o: any = {}; for (const k of Object.keys(r)) { if (!k.startsWith("_")) o[k] = r[k]; } return o; });
@@ -289,7 +289,7 @@ function exportDayToXLSX(project: Project, dateStr: string) {
 }
 
 // Fix #8: PDF opens in new tab with a back button via postMessage / history
-function exportDayToPDF(project: Project, dateStr: string) {
+export function exportDayToPDF(project: Project, dateStr: string) {
   const day = project.shootingDays[dateStr]; if (!day) return;
   const dateLabel = new Date(dateStr + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
   const childTable = (row: any) => {
@@ -327,7 +327,7 @@ function exportDayToPDF(project: Project, dateStr: string) {
 }
 
 // Fix #4: export all days for a single child
-function exportChildAllDays(project: Project, child: Child) {
+export function exportChildAllDays(project: Project, child: Child) {
   const days = Object.entries(project.shootingDays)
     .filter(([, day]) => day.child_ids?.includes(child.id))
     .sort(([a], [b]) => a.localeCompare(b));
@@ -382,7 +382,7 @@ function exportChildAllDays(project: Project, child: Child) {
 }
 
 // Fix #5 + #6: export global project recap (one row per child per day + summary tab)
-function exportProjectGlobal(project: Project) {
+export function exportProjectGlobal(project: Project) {
   const sortedDates = Object.keys(project.shootingDays).sort();
   if (sortedDates.length === 0) { alert("Aucune journée de tournage dans ce projet."); return; }
 
@@ -467,7 +467,7 @@ function exportProjectGlobal(project: Project) {
 }
 
 // Fix #6: PDF global recap — one section per child, dates as columns (format DRIEETS)
-function exportProjectGlobalPDF(project: Project) {
+export function exportProjectGlobalPDF(project: Project) {
   const sortedDates = Object.keys(project.shootingDays).sort();
   if (sortedDates.length === 0) { alert("Aucune journée de tournage dans ce projet."); return; }
 
