@@ -725,6 +725,57 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
   const [activeDate, setActiveDate] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const userId = session.user.id;
+  const notifiedRef = useRef<Set<string>>(new Set());
+
+  // Demande la permission de notification (notif en avant-plan, sans push serveur)
+  useEffect(() => {
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission().catch(() => {});
+    }
+  }, []);
+
+  // Notif quand on approche / dépasse le timing max pendant une journée en cours
+  useEffect(() => {
+    if (view !== "shooting" || !activeProject || !activeDate) return;
+    const check = () => {
+      const day = activeProject.shootingDays[activeDate];
+      if (!day) return;
+      for (const child of activeProject.children) {
+        const session = day.sessions?.[child.id];
+        if (!session?.start_time || session.status === "done") continue;
+        const vacation = isVacation(child, activeDate);
+        const band = getAgeBand(child.dob);
+        const period: Period = vacation ? "vacation" : "school";
+        const maxWork = activeProject.rules.maxWorkMinutes[band][period];
+        const maxAmp = activeProject.rules.maxAmplitudeMinutes;
+        const stats = computeSessionStats(session, activeProject.rules);
+        if (!stats) continue;
+        const name = `${child.first_name} ${child.last_name}`;
+        const notify = (key: string, title: string, body: string) => {
+          if (notifiedRef.current.has(key)) return;
+          notifiedRef.current.add(key);
+          if ("Notification" in window && Notification.permission === "granted") {
+            try { new Notification(title, { body, icon: "/favicon.ico" }); } catch {}
+          }
+        };
+        if (stats.workMin >= maxWork * 0.8 && stats.workMin < maxWork) {
+          notify(`work-warn-${child.id}-${activeDate}`, "⚠ Temps de travail", `${name} approche du max (${formatMinutes(stats.workMin)} / ${formatMinutes(maxWork)})`);
+        }
+        if (stats.workMin >= maxWork) {
+          notify(`work-over-${child.id}-${activeDate}`, "🔴 Dépassement travail", `${name} a dépassé le temps max de travail !`);
+        }
+        if (stats.amplitudeMin >= maxAmp * 0.9 && stats.amplitudeMin < maxAmp) {
+          notify(`amp-warn-${child.id}-${activeDate}`, "⚠ Amplitude", `${name} approche de l'amplitude max (${formatMinutes(stats.amplitudeMin)} / ${formatMinutes(maxAmp)})`);
+        }
+        if (stats.amplitudeMin >= maxAmp) {
+          notify(`amp-over-${child.id}-${activeDate}`, "🔴 Amplitude dépassée", `${name} a dépassé l'amplitude maximale !`);
+        }
+      }
+    };
+    check();
+    const interval = setInterval(check, 60000);
+    return () => clearInterval(interval);
+  }, [view, activeProject, activeDate]);
 
   const loadProjects = useCallback(async () => {
     setLoading(true);
@@ -747,7 +798,20 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     return { ...proj, children: mappedChildren, groups: groups || [], shootingDays };
   }
 
-  async function openProject(id: string) { setLoading(true); const f = await loadFullProject(id); setActiveProject(f); setView("project"); setLoading(false); }
+  async function openProject(id: string) {
+    setLoading(true);
+    const f = await loadFullProject(id);
+    setActiveProject(f);
+    const today = todayStr();
+    const todayDay = f.shootingDays?.[today];
+    if (todayDay && (todayDay.child_ids || []).length > 0) {
+      setActiveDate(today);
+      setView("shooting");
+    } else {
+      setView("project");
+    }
+    setLoading(false);
+  }
 
   async function refreshActive() {
     if (!activeProject?.id) return;
