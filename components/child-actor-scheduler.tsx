@@ -1276,10 +1276,9 @@ function SettingsTab({ rules, onUpdateRules }: { rules: Rules; onUpdateRules: (f
               <div className="font-semibold text-white text-xs mb-2">{BL[band]}</div>
               <div className="grid grid-cols-2 gap-3">{(["school", "vacation"] as const).map(p => (
                 <div key={p}>
-                  <label className="text-[10px] text-slate-400 block mb-1">{p === "school" ? "🏫 Scolaire" : "🌴 Vacances"}</label>
-                  <div className="flex items-center gap-1">
-                    <input type="number" min="15" max="720" step="15" value={rules[rk][band][p]} onChange={e => setRule(`${rk}.${band}.${p}`, e.target.value)} className="w-16 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-white text-xs text-center" />
-                    <span className="text-[10px] text-slate-500">{formatMinutes(rules[rk][band][p])}</span>
+                  <div className="text-[10px] text-slate-400 mb-1">{p === "school" ? "🏫 Scolaire" : "🌴 Vacances"}</div>
+                  <div className="bg-slate-800/80 border border-slate-700 rounded-lg px-2 py-1.5 text-slate-400 text-xs font-mono text-center">
+                    {formatMinutes(rules[rk][band][p])}
                   </div>
                 </div>
               ))}</div>
