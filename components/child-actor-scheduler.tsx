@@ -1258,7 +1258,7 @@ function SettingsTab({ rules, onUpdateRules }: { rules: Rules; onUpdateRules: (f
     <div className="space-y-4">
       <h2 className="font-bold text-base mb-1" style={{ fontFamily: "Syne, sans-serif" }}>Paramètres DRIEETS</h2>
       <div className="space-y-2">
-        {([["Amplitude max", "maxAmplitudeMinutes", 60, 720, 30], ["Pause minimum", "minBreakMinutes", 5, 60, 1], ["Repos entre journées", "minRestBetweenDays", 480, 1440, 30]] as const).map(([label, key, min, max, step]) => (
+        {([["Amplitude max", "maxAmplitudeMinutes", 60, 720, 30], ["Pause minimum", "minBreakMinutes", 5, 60, 1]] as const).map(([label, key, min, max, step]) => (
           <div key={key} className="bg-slate-900/50 border border-slate-700 rounded-xl p-3 flex items-center justify-between">
             <div className="text-sm text-white">{label}</div>
             <div className="flex items-center gap-2">
