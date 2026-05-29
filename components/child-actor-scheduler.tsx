@@ -242,8 +242,10 @@ export function computeSessionStats(session: Session | undefined, rules: Rules):
 export function buildExportRows(project: Project, dateStr: string) {
   const day = project.shootingDays[dateStr]; if (!day) return [];
   const rows: any[] = [];
-  for (const childId of day.child_ids || []) {
-    const child = project.children.find(c => c.id === childId); if (!child) continue;
+  // Tri statut → nom de famille (alpha) pour des exports cohérents avec l'écran
+  const orderedChildren = sortByRoleThenAlpha((day.child_ids || []).map(id => project.children.find(c => c.id === id)).filter(Boolean) as Child[]);
+  for (const child of orderedChildren) {
+    const childId = child.id;
     const session = day.sessions?.[childId];
     const vacation = isVacation(child, dateStr);
     const band = getAgeBand(child.dob);
@@ -400,8 +402,9 @@ export function exportProjectGlobal(project: Project) {
   const allRows: any[] = [];
   for (const dateStr of sortedDates) {
     const day = project.shootingDays[dateStr];
-    for (const childId of day.child_ids || []) {
-      const child = project.children.find(c => c.id === childId); if (!child) continue;
+    const orderedChildren = sortByRoleThenAlpha((day.child_ids || []).map(id => project.children.find(c => c.id === id)).filter(Boolean) as Child[]);
+    for (const child of orderedChildren) {
+      const childId = child.id;
       const session = day.sessions?.[childId];
       const vacation = isVacation(child, dateStr);
       const band = getAgeBand(child.dob);
@@ -437,7 +440,7 @@ export function exportProjectGlobal(project: Project) {
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(allRows), "Récapitulatif global");
     // Sheet 2: per child summary (total across all days)
     const childSummary: any[] = [];
-    for (const child of project.children.filter(c => !c.archived)) {
+    for (const child of sortByRoleThenAlpha(project.children.filter(c => !c.archived))) {
       const childDays = sortedDates.filter(d => project.shootingDays[d]?.child_ids?.includes(child.id));
       if (childDays.length === 0) continue;
       let totalWork = 0, totalBreak = 0, totalAmp = 0, depassWork = 0, depassAmp = 0;
@@ -520,7 +523,7 @@ export function exportProjectGlobalPDF(project: Project) {
   <h1>KidsTime — Récapitulatif global</h1>
   <h2>${project.name} · Généré le ${new Date().toLocaleDateString("fr-FR")}</h2>`;
 
-  for (const child of project.children.filter(c => !c.archived)) {
+  for (const child of sortByRoleThenAlpha(project.children.filter(c => !c.archived))) {
     type DayData = { inDay: boolean; session?: Session; vacation: boolean; maxWork: number; maxAmp: number; stats: SessionStats | null };
     const dd: Record<string, DayData> = {};
     for (const dateStr of sortedDates) {
