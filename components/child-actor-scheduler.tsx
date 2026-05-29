@@ -1386,6 +1386,7 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
   const [search, setSearch] = useState("");
   const [roleTab, setRoleTab] = useState<ChildRole | "all">("all");
   const [expandedId, setExpandedId] = useState<string | null>(null); // Fix #1: collapsed cards
+  const [pendingUncheck, setPendingUncheck] = useState<Child | null>(null);
 
   useEffect(() => { const t = setInterval(() => setTick(n => n + 1), 15000); return () => clearInterval(t); }, []);
 
@@ -1478,7 +1479,11 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
               <div className="text-[10px] text-slate-400 uppercase tracking-wider mb-2">Individuellement</div>
               <div className="space-y-0.5">{project.children.filter(c => !c.archived).map(c => (
                 <label key={c.id} className="flex items-center gap-3 py-2.5 cursor-pointer">
-                  <input type="checkbox" className="accent-blue-500 w-5 h-5" checked={childIds.includes(c.id)} onChange={() => onToggleChild(c.id)} />
+                  <input type="checkbox" className="accent-blue-500 w-5 h-5" checked={childIds.includes(c.id)}
+                    onChange={() => {
+                      if (childIds.includes(c.id)) { setPendingUncheck(c); }
+                      else { onToggleChild(c.id); }
+                    }} />
                   <span className="text-sm text-slate-200 flex-1">{c.first_name} {c.last_name}</span>
                   {c.role && <RoleBadge role={c.role} />}
                 </label>
@@ -1525,6 +1530,28 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
             })}</div>
         }
       </div>
+
+      {pendingUncheck && (
+        <Modal title="Retirer l'enfant ?" onClose={() => setPendingUncheck(null)}>
+          <div className="space-y-4">
+            <div className="text-sm text-slate-300">
+              Voulez-vous vraiment retirer <b className="text-white">{pendingUncheck.first_name} {pendingUncheck.last_name}</b> de cette journée ?
+              {day.sessions?.[pendingUncheck.id]?.start_time && (
+                <div className="mt-2 bg-red-900/30 border border-red-700/50 rounded-lg px-3 py-2 text-xs text-red-300">
+                  ⚠ Cet enfant a des données de session enregistrées — elles seront perdues.
+                </div>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <Btn variant="ghost" className="flex-1" onClick={() => setPendingUncheck(null)}>Annuler</Btn>
+              <button onClick={() => { onToggleChild(pendingUncheck.id); setPendingUncheck(null); }}
+                className="flex-1 bg-red-700 hover:bg-red-600 text-white py-3 rounded-xl font-bold text-sm">
+                Retirer
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {actionModal && <TimeActionModal type={actionModal.type} childCount={selected.size} dateStr={dateStr}
         onConfirm={timeISO => {
