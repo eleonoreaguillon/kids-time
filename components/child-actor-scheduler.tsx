@@ -866,7 +866,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
   const Fonts = () => <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@700;800&display=swap" rel="stylesheet" />;
   if (loading && view === "home") return <div className="min-h-screen bg-[#080d16] flex items-center justify-center"><Fonts /><div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" /></div>;
 
-  if (view === "home") return <><Fonts /><HomeView projects={projects} userEmail={session.user.email} onCreate={createProject} onOpen={openProject} onDelete={deleteProject} onSignOut={onSignOut} /></>;
+  if (view === "home") return <><Fonts /><HomeView projects={projects} userEmail={session.user.email} onCreate={createProject} onOpen={openProject} onSignOut={onSignOut} /></>;
   if (view === "project" && activeProject) return <><Fonts /><ProjectView project={activeProject}
     onBack={() => { setView("home"); loadProjects(); }}
     onAddChild={addChild} onAddChildren={addChildren} onUpdateChild={updateChild} onRemoveChild={removeChild}
@@ -876,6 +876,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     onExportProject={() => exportProjectGlobal(activeProject)}
     onExportProjectPDF={() => exportProjectGlobalPDF(activeProject)}
     onExportChildDays={child => exportChildAllDays(activeProject, child)}
+    onDelete={() => { deleteProject(activeProject.id); setView("home"); loadProjects(); }}
   /></>;
   if (view === "shooting" && activeProject && activeDate) return <><Fonts /><ShootingView project={activeProject} dateStr={activeDate}
     onBack={() => { setView("project"); refreshActive(); }}
@@ -897,7 +898,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
   return null;
 }
 
-function HomeView({ projects, userEmail, onCreate, onOpen, onDelete, onSignOut }: { projects: Project[]; userEmail: string; onCreate: (n: string) => void; onOpen: (id: string) => void; onDelete: (id: string) => void; onSignOut: () => void }) {
+function HomeView({ projects, userEmail, onCreate, onOpen, onSignOut }: { projects: Project[]; userEmail: string; onCreate: (n: string) => void; onOpen: (id: string) => void; onSignOut: () => void }) {
   const [name, setName] = useState("");
   return (
     <div className="min-h-screen bg-[#080d16] text-white" style={{ fontFamily: "'DM Mono', monospace" }}>
@@ -924,7 +925,7 @@ function HomeView({ projects, userEmail, onCreate, onOpen, onDelete, onSignOut }
             {projects.map(p => (
               <div key={p.id} className="flex items-center gap-3 bg-slate-900/50 border border-slate-700 rounded-xl px-4 py-4 active:bg-slate-800 transition-colors cursor-pointer" onClick={() => onOpen(p.id)}>
                 <div className="flex-1"><div className="font-bold text-white" style={{ fontFamily: "Syne, sans-serif" }}>{p.name}</div><div className="text-xs text-slate-500">{new Date(p.created_at).toLocaleDateString("fr-FR")}</div></div>
-                <button onClick={e => { e.stopPropagation(); if (window.confirm(`Supprimer "${p.name}" ? Cette action est irréversible.`)) onDelete(p.id); }} className="text-slate-600 hover:text-red-400 text-xl w-10 h-10 flex items-center justify-center">✕</button>
+                <span className="text-slate-600 text-sm">→</span>
               </div>
             ))}
           </div>
@@ -934,7 +935,7 @@ function HomeView({ projects, userEmail, onCreate, onOpen, onDelete, onSignOut }
   );
 }
 
-function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild, onRemoveChild, onArchiveChild, onAddGroup, onUpdateGroup, onRemoveGroup, onUpdateRules, onOpenDay, onExportProject, onExportProjectPDF, onExportChildDays }: {
+function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild, onRemoveChild, onArchiveChild, onAddGroup, onUpdateGroup, onRemoveGroup, onUpdateRules, onOpenDay, onExportProject, onExportProjectPDF, onExportChildDays, onDelete }: {
   project: Project; onBack: () => void;
   onAddChild: (c: any) => void; onAddChildren: (cs: any[]) => Promise<void>;
   onUpdateChild: (id: string, d: any) => void; onRemoveChild: (id: string) => void;
@@ -943,6 +944,7 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
   onUpdateRules: (fn: (r: Rules) => Rules) => void; onOpenDay: (date: string) => void;
   onExportProject: () => void; onExportProjectPDF: () => void;
   onExportChildDays: (child: Child) => void;
+  onDelete: () => void;
 }) {
   const [tab, setTab] = useState<"calendar" | "children" | "groups" | "settings">("calendar");
   const [childModal, setChildModal] = useState<Child | "new" | null>(null);
@@ -970,7 +972,7 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
         {tab === "calendar" && <CalendarTab project={project} onOpenDay={onOpenDay} />}
         {tab === "children" && <ChildrenTab project={project} onAdd={() => setChildModal("new")} onEdit={c => setChildModal(c)} onRemove={onRemoveChild} onImport={onAddChildren} onArchive={onArchiveChild} onExportChildDays={onExportChildDays} />}
         {tab === "groups" && <GroupsTab project={project} onAdd={() => setGroupModal("new")} onRemove={onRemoveGroup} onUpdateGroup={onUpdateGroup} />}
-        {tab === "settings" && <SettingsTab rules={project.rules} onUpdateRules={onUpdateRules} />}
+        {tab === "settings" && <SettingsTab rules={project.rules} onUpdateRules={onUpdateRules} projectName={project.name} onDelete={onDelete} />}
       </div>
 
       {/* Fix #1: bottom tab bar for mobile */}
@@ -1249,7 +1251,8 @@ function GroupsTab({ project, onAdd, onRemove, onUpdateGroup }: { project: Proje
   );
 }
 
-function SettingsTab({ rules, onUpdateRules }: { rules: Rules; onUpdateRules: (fn: (r: Rules) => Rules) => void }) {
+function SettingsTab({ rules, onUpdateRules, projectName, onDelete }: { rules: Rules; onUpdateRules: (fn: (r: Rules) => Rules) => void; projectName: string; onDelete: () => void }) {
+  const [confirmName, setConfirmName] = useState("");
   function setRule(path: string, value: string) {
     onUpdateRules(r => { const copy = JSON.parse(JSON.stringify(r)); const keys = path.split("."); let obj: any = copy; for (let i = 0; i < keys.length - 1; i++) obj = obj[keys[i]]; obj[keys[keys.length - 1]] = Number(value); return copy; });
   }
@@ -1286,6 +1289,25 @@ function SettingsTab({ rules, onUpdateRules }: { rules: Rules; onUpdateRules: (f
           ))}</div>
         </div>
       ))}
+
+      {/* Zone de danger */}
+      <div className="mt-6 border border-red-900/60 rounded-2xl p-4 bg-red-950/20">
+        <h2 className="font-bold text-sm text-red-400 mb-1" style={{ fontFamily: "Syne, sans-serif" }}>⚠️ Zone de danger</h2>
+        <p className="text-xs text-slate-400 mb-3">Pour supprimer cette production, tapez son nom exact ci-dessous puis confirmez.</p>
+        <input
+          className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-white text-sm mb-3 focus:outline-none focus:border-red-500 placeholder:text-slate-600"
+          placeholder={projectName}
+          value={confirmName}
+          onChange={e => setConfirmName(e.target.value)}
+        />
+        <button
+          disabled={confirmName !== projectName}
+          onClick={() => { if (confirmName === projectName) onDelete(); }}
+          className={`w-full py-2.5 rounded-xl text-sm font-semibold transition-colors ${confirmName === projectName ? "bg-red-700 hover:bg-red-600 text-white" : "bg-slate-800 text-slate-600 cursor-not-allowed"}`}
+        >
+          Supprimer définitivement
+        </button>
+      </div>
     </div>
   );
 }
