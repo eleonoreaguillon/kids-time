@@ -69,6 +69,8 @@ interface Project {
   children: Child[];
   groups: Group[];
   shootingDays: Record<string, ShootingDay>;
+  share_token?: string | null;
+  share_password?: string | null;
 }
 
 interface SessionStats {
@@ -746,6 +748,21 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
 
   async function deleteProject(id: string) { await supabase.from("projects").delete().eq("id", id); loadProjects(); }
 
+  async function generateShareToken(projectId: string): Promise<string> {
+    const token = crypto.randomUUID();
+    await supabase.from("projects").update({ share_token: token }).eq("id", projectId);
+    await refreshActive();
+    return token;
+  }
+  async function setSharePassword(projectId: string, password: string | null) {
+    await supabase.from("projects").update({ share_password: password || null }).eq("id", projectId);
+    await refreshActive();
+  }
+  async function revokeShareToken(projectId: string) {
+    await supabase.from("projects").update({ share_token: null, share_password: null }).eq("id", projectId);
+    await refreshActive();
+  }
+
   async function addChild(child: { fullName: string; dob: string; vacationPeriods: VacationPeriod[]; role: ChildRole | null; derogations?: Derogation[] }) {
     const { firstName, lastName } = splitFullName(child.fullName);
     const { error } = await supabase.from("children").insert({
@@ -877,6 +894,9 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     onExportProjectPDF={() => exportProjectGlobalPDF(activeProject)}
     onExportChildDays={child => exportChildAllDays(activeProject, child)}
     onDelete={() => { deleteProject(activeProject.id); setView("home"); loadProjects(); }}
+    onGenerateShareToken={() => generateShareToken(activeProject.id)}
+    onSetSharePassword={(pwd) => setSharePassword(activeProject.id, pwd)}
+    onRevokeShareToken={() => revokeShareToken(activeProject.id)}
   /></>;
   if (view === "shooting" && activeProject && activeDate) return <><Fonts /><ShootingView project={activeProject} dateStr={activeDate}
     onBack={() => { setView("project"); refreshActive(); }}
@@ -896,6 +916,105 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     onExportXLSX={() => exportDayToXLSX(activeProject, activeDate)}
     onExportPDF={() => exportDayToPDF(activeProject, activeDate)} /></>;
   return null;
+}
+
+// ─── ShareModal ───────────────────────────────────────────────────────────────
+function ShareModal({ project, onClose, onGenerate, onSetPassword, onRevoke }: {
+  project: Project;
+  onClose: () => void;
+  onGenerate: () => Promise<string>;
+  onSetPassword: (pwd: string | null) => Promise<void>;
+  onRevoke: () => Promise<void>;
+}) {
+  const [loading, setLoading] = useState(false);
+  const [password, setPassword] = useState(project.share_password ?? "");
+  const [copied, setCopied] = useState(false);
+  const [showPwd, setShowPwd] = useState(false);
+
+  const token = project.share_token;
+  const baseUrl = typeof window !== "undefined" ? `${window.location.origin}/share/${token}` : "";
+
+  async function handleGenerate() {
+    setLoading(true); await onGenerate(); setLoading(false);
+  }
+  async function handleSavePassword() {
+    setLoading(true); await onSetPassword(password.trim() || null); setLoading(false);
+  }
+  async function handleRevoke() {
+    if (!confirm("Désactiver le lien de partage ? Il ne sera plus accessible.")) return;
+    setLoading(true); await onRevoke(); onClose();
+  }
+  function handleCopy() {
+    navigator.clipboard.writeText(baseUrl);
+    setCopied(true); setTimeout(() => setCopied(false), 2000);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm px-4 pb-4" onClick={onClose}>
+      <div className="bg-[#0f1a2e] border border-slate-700 rounded-2xl w-full max-w-sm p-5 space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h2 className="font-bold text-white" style={{ fontFamily: "Syne, sans-serif" }}>🔗 Lien de partage</h2>
+          <button onClick={onClose} className="text-slate-400 hover:text-white w-8 h-8 flex items-center justify-center">✕</button>
+        </div>
+        <p className="text-xs text-slate-400">Partagez ce projet en lecture seule (calendrier + enfants). Le destinataire ne peut rien modifier.</p>
+
+        {!token ? (
+          <button onClick={handleGenerate} disabled={loading}
+            className="w-full bg-blue-700 hover:bg-blue-600 text-white font-semibold py-3 rounded-xl text-sm transition-colors disabled:opacity-50">
+            {loading ? "Génération…" : "Générer un lien de partage"}
+          </button>
+        ) : (
+          <>
+            {/* Link display */}
+            <div className="bg-slate-900/70 border border-slate-700 rounded-xl p-3 flex items-center gap-2">
+              <span className="text-xs text-slate-300 flex-1 truncate font-mono">{baseUrl}</span>
+              <button onClick={handleCopy} className={`text-xs px-2 py-1 rounded-lg font-semibold flex-shrink-0 transition-colors ${copied ? "bg-green-700 text-green-200" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}>
+                {copied ? "✓ Copié" : "Copier"}
+              </button>
+            </div>
+
+            {/* Password */}
+            <div className="space-y-2">
+              <label className="text-[10px] text-slate-400 uppercase tracking-wider">Mot de passe <span className="text-slate-600 normal-case font-normal">(optionnel)</span></label>
+              <div className="flex gap-2">
+                <div className="flex-1 relative">
+                  <input
+                    type={showPwd ? "text" : "password"}
+                    placeholder="Laisser vide = accès libre"
+                    value={password}
+                    onChange={e => setPassword(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-600 rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:border-blue-500 placeholder:text-slate-600 pr-10"
+                  />
+                  <button type="button" onClick={() => setShowPwd(v => !v)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs">
+                    {showPwd ? "🙈" : "👁"}
+                  </button>
+                </div>
+                <button onClick={handleSavePassword} disabled={loading}
+                  className="bg-blue-700 hover:bg-blue-600 text-white px-3 rounded-xl text-sm font-semibold disabled:opacity-50 transition-colors">
+                  {loading ? "…" : "OK"}
+                </button>
+              </div>
+              {project.share_password && <div className="text-[10px] text-amber-400">🔒 Protégé par mot de passe</div>}
+              {!project.share_password && <div className="text-[10px] text-green-400">🌐 Accès libre (sans mot de passe)</div>}
+            </div>
+
+            {/* Regenerate / Revoke */}
+            <div className="flex gap-2 pt-1">
+              <button onClick={handleGenerate} disabled={loading}
+                className="flex-1 text-xs text-slate-400 border border-slate-700 hover:border-slate-500 py-2 rounded-xl transition-colors">
+                🔄 Regénérer
+              </button>
+              <button onClick={handleRevoke} disabled={loading}
+                className="flex-1 text-xs text-red-400 border border-red-900/50 hover:border-red-700 py-2 rounded-xl transition-colors">
+                🚫 Désactiver
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function HomeView({ projects, userEmail, onCreate, onOpen, onSignOut }: { projects: Project[]; userEmail: string; onCreate: (n: string) => void; onOpen: (id: string) => void; onSignOut: () => void }) {
@@ -935,7 +1054,7 @@ function HomeView({ projects, userEmail, onCreate, onOpen, onSignOut }: { projec
   );
 }
 
-function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild, onRemoveChild, onArchiveChild, onAddGroup, onUpdateGroup, onRemoveGroup, onUpdateRules, onOpenDay, onExportProject, onExportProjectPDF, onExportChildDays, onDelete }: {
+function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild, onRemoveChild, onArchiveChild, onAddGroup, onUpdateGroup, onRemoveGroup, onUpdateRules, onOpenDay, onExportProject, onExportProjectPDF, onExportChildDays, onDelete, onGenerateShareToken, onSetSharePassword, onRevokeShareToken }: {
   project: Project; onBack: () => void;
   onAddChild: (c: any) => void; onAddChildren: (cs: any[]) => Promise<void>;
   onUpdateChild: (id: string, d: any) => void; onRemoveChild: (id: string) => void;
@@ -945,10 +1064,14 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
   onExportProject: () => void; onExportProjectPDF: () => void;
   onExportChildDays: (child: Child) => void;
   onDelete: () => void;
+  onGenerateShareToken: () => Promise<string>;
+  onSetSharePassword: (pwd: string | null) => Promise<void>;
+  onRevokeShareToken: () => Promise<void>;
 }) {
   const [tab, setTab] = useState<"calendar" | "children" | "groups" | "settings">("calendar");
   const [childModal, setChildModal] = useState<Child | "new" | null>(null);
   const [groupModal, setGroupModal] = useState<Group | "new" | null>(null);
+  const [shareModal, setShareModal] = useState(false);
   const tabs = [{ id: "calendar", label: "📅" }, { id: "children", label: "👦" }, { id: "groups", label: "👥" }, { id: "settings", label: "⚙️" }];
   const tabLabels: Record<string, string> = { calendar: "Calendrier", children: "Enfants", groups: "Groupes", settings: "Paramètres" };
   return (
@@ -957,8 +1080,11 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
       <div className="sticky top-0 z-10 bg-[#080d16] border-b border-slate-800 px-4 py-3 flex items-center gap-3">
         <button onClick={onBack} className="text-slate-400 hover:text-white text-sm w-8 h-8 flex items-center justify-center rounded-lg border border-slate-700">←</button>
         <h1 className="text-base font-extrabold truncate flex-1" style={{ fontFamily: "Syne, sans-serif" }}>{project.name}</h1>
-        <div className="text-[10px] text-slate-500">{project.children.length} enfant(s)</div>
+        <button onClick={() => setShareModal(true)} className="text-xs text-blue-400 border border-blue-800/60 px-3 py-1.5 rounded-lg hover:bg-blue-900/30 transition-colors flex items-center gap-1">
+          🔗 <span className="hidden sm:inline">Partager</span>
+        </button>
       </div>
+      {shareModal && <ShareModal project={project} onClose={() => setShareModal(false)} onGenerate={onGenerateShareToken} onSetPassword={onSetSharePassword} onRevoke={onRevokeShareToken} />}
 
       {/* Fix #5/#6: project export buttons */}
       {tab === "calendar" && (
