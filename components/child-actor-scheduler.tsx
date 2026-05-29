@@ -113,6 +113,16 @@ export const ROLE_COLORS: Record<ChildRole, string> = {
 };
 export const ALL_ROLES: ChildRole[] = ["role", "silhouette", "figurant"];
 
+// Tri des enfants : Rôle → Silhouette → Figurant → (sans statut), puis alphabétique
+const ROLE_ORDER: Record<string, number> = { role: 0, silhouette: 1, figurant: 2 };
+export function sortByRoleThenAlpha(cs: Child[]): Child[] {
+  return [...cs].sort((a, b) => {
+    const ra = ROLE_ORDER[a.role ?? ""] ?? 3, rb = ROLE_ORDER[b.role ?? ""] ?? 3;
+    if (ra !== rb) return ra - rb;
+    return `${a.last_name} ${a.first_name}`.localeCompare(`${b.last_name} ${b.first_name}`, "fr");
+  });
+}
+
 export function getAge(dob: string): number {
   const t = new Date(), b = new Date(dob);
   let a = t.getFullYear() - b.getFullYear();
@@ -883,8 +893,8 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
   const Fonts = () => <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@700;800&display=swap" rel="stylesheet" />;
   if (loading && view === "home") return <div className="min-h-screen bg-[#080d16] flex items-center justify-center"><Fonts /><div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" /></div>;
 
-  if (view === "home") return <><Fonts /><HomeView projects={projects} userEmail={session.user.email} onCreate={createProject} onOpen={openProject} onSignOut={onSignOut} /></>;
-  if (view === "project" && activeProject) return <><Fonts /><ProjectView project={activeProject}
+  if (view === "home") return <><Fonts /><OfflineBanner /><HomeView projects={projects} userEmail={session.user.email} onCreate={createProject} onOpen={openProject} onSignOut={onSignOut} /></>;
+  if (view === "project" && activeProject) return <><Fonts /><OfflineBanner /><ProjectView project={activeProject}
     onBack={() => { setView("home"); loadProjects(); }}
     onAddChild={addChild} onAddChildren={addChildren} onUpdateChild={updateChild} onRemoveChild={removeChild}
     onArchiveChild={archiveChild}
@@ -898,7 +908,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     onSetSharePassword={(pwd) => setSharePassword(activeProject.id, pwd)}
     onRevokeShareToken={() => revokeShareToken(activeProject.id)}
   /></>;
-  if (view === "shooting" && activeProject && activeDate) return <><Fonts /><ShootingView project={activeProject} dateStr={activeDate}
+  if (view === "shooting" && activeProject && activeDate) return <><Fonts /><OfflineBanner /><ShootingView project={activeProject} dateStr={activeDate}
     onBack={() => { setView("project"); refreshActive(); }}
     onStartSessions={(cids, t) => startSessionsSequentially(activeDate, cids, t)}
     onStartSession={(cid, t) => startSession(activeDate, cid, t)}
@@ -916,6 +926,24 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     onExportXLSX={() => exportDayToXLSX(activeProject, activeDate)}
     onExportPDF={() => exportDayToPDF(activeProject, activeDate)} /></>;
   return null;
+}
+
+// ─── OfflineBanner (autonome : gère lui-même l'état réseau) ───────────────────
+function OfflineBanner() {
+  const [isOnline, setIsOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
+  useEffect(() => {
+    const on = () => setIsOnline(true), off = () => setIsOnline(false);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
+    return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
+  }, []);
+  if (isOnline) return null;
+  return (
+    <div className="fixed top-0 left-0 right-0 z-50 bg-amber-900/90 border-b border-amber-700 px-4 py-2 flex items-center justify-center gap-2 text-amber-200 text-xs backdrop-blur">
+      <span>📡</span>
+      <span>Mode hors-ligne — les modifications reprendront dès le retour du réseau.</span>
+    </div>
+  );
 }
 
 // ─── ShareModal ───────────────────────────────────────────────────────────────
@@ -1177,7 +1205,7 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
   const activeChildren = project.children.filter(c => !c.archived);
   const archivedChildren = project.children.filter(c => c.archived);
   const rolesPresent = ALL_ROLES.filter(r => activeChildren.some(c => c.role === r));
-  const displayChildren = showArchived ? archivedChildren : (roleTab === "all" ? activeChildren : activeChildren.filter(c => c.role === roleTab));
+  const displayChildren = sortByRoleThenAlpha(showArchived ? archivedChildren : (roleTab === "all" ? activeChildren : activeChildren.filter(c => c.role === roleTab)));
 
   function downloadTemplate() {
     const csv = "Nom Prénom;Statut (role/silhouette/figurant);Date de naissance (JJ/MM/AAAA);Début vacances (JJ/MM/AAAA);Fin vacances (JJ/MM/AAAA)\nMartin Léa;role;15/03/2015;01/07/2025;31/08/2025\n";
@@ -1543,15 +1571,15 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
   const sessions = day.sessions || {};
   const rules = project.rules;
   const dateLabel = new Date(dateStr + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-  const childrenInDay = childIds.map(id => project.children.find(c => c.id === id)).filter(Boolean) as Child[];
+  const childrenInDay = sortByRoleThenAlpha(childIds.map(id => project.children.find(c => c.id === id)).filter(Boolean) as Child[]);
   const rolesPresent = ALL_ROLES.filter(r => childrenInDay.some(c => c.role === r));
 
-  const filteredIds = childIds.filter(id => {
-    const c = project.children.find(ch => ch.id === id); if (!c) return false;
+  // Dérivé de childrenInDay (déjà trié par rôle puis alpha) pour préserver l'ordre d'affichage
+  const filteredIds = childrenInDay.filter(c => {
     if (search.trim()) { const q = normalize(search); if (!normalize(`${c.first_name} ${c.last_name}`).includes(q) && !normalize(`${c.last_name} ${c.first_name}`).includes(q)) return false; }
     if (roleTab === "all") return true;
     return c.role === roleTab;
-  });
+  }).map(c => c.id);
 
   function toggleSelect(id: string) { setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }); }
   const selList = [...selected];
