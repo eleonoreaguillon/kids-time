@@ -57,32 +57,39 @@ BEGIN
     RETURN jsonb_build_object('error', 'not_found');
   END IF;
 
-  -- 2) Rate-limit : combien d'échecs de mot de passe pour ce token sur la
-  --    fenêtre récente ? Si >= seuil → bloque temporairement.
-  IF v_project.share_password IS NOT NULL AND v_project.share_password <> '' THEN
-    SELECT COUNT(*) INTO v_recent_fails
-    FROM share_access_log
-    WHERE share_token = p_token
-      AND result = 'wrong_password'
-      AND accessed_at >= (now() - v_window);
+  -- 2a) Sécurité : un lien partagé DOIT toujours être protégé par un mot de
+  --     passe. Si aucun mot de passe n'est défini sur le projet, on bloque
+  --     l'accès quelle que soit la valeur passée par l'appelant.
+  IF v_project.share_password IS NULL OR v_project.share_password = '' THEN
+    INSERT INTO share_access_log (project_id, share_token, result, user_agent)
+    VALUES (v_project.id, p_token, 'password_required', p_user_agent);
+    RETURN jsonb_build_object('error', 'password_required');
+  END IF;
 
-    IF v_recent_fails >= v_max_fails THEN
-      INSERT INTO share_access_log (project_id, share_token, result, user_agent)
-      VALUES (v_project.id, p_token, 'rate_limited', p_user_agent);
-      RETURN jsonb_build_object('error', 'rate_limited');
-    END IF;
+  -- 2b) Rate-limit : combien d'échecs de mot de passe pour ce token sur la
+  --     fenêtre récente ? Si >= seuil → bloque temporairement.
+  SELECT COUNT(*) INTO v_recent_fails
+  FROM share_access_log
+  WHERE share_token = p_token
+    AND result = 'wrong_password'
+    AND accessed_at >= (now() - v_window);
 
-    IF p_password IS NULL OR p_password = '' THEN
-      INSERT INTO share_access_log (project_id, share_token, result, user_agent)
-      VALUES (v_project.id, p_token, 'password_required', p_user_agent);
-      RETURN jsonb_build_object('error', 'password_required');
-    END IF;
+  IF v_recent_fails >= v_max_fails THEN
+    INSERT INTO share_access_log (project_id, share_token, result, user_agent)
+    VALUES (v_project.id, p_token, 'rate_limited', p_user_agent);
+    RETURN jsonb_build_object('error', 'rate_limited');
+  END IF;
 
-    IF p_password <> v_project.share_password THEN
-      INSERT INTO share_access_log (project_id, share_token, result, user_agent)
-      VALUES (v_project.id, p_token, 'wrong_password', p_user_agent);
-      RETURN jsonb_build_object('error', 'wrong_password');
-    END IF;
+  IF p_password IS NULL OR p_password = '' THEN
+    INSERT INTO share_access_log (project_id, share_token, result, user_agent)
+    VALUES (v_project.id, p_token, 'password_required', p_user_agent);
+    RETURN jsonb_build_object('error', 'password_required');
+  END IF;
+
+  IF p_password <> v_project.share_password THEN
+    INSERT INTO share_access_log (project_id, share_token, result, user_agent)
+    VALUES (v_project.id, p_token, 'wrong_password', p_user_agent);
+    RETURN jsonb_build_object('error', 'wrong_password');
   END IF;
 
   -- 3) Charge les enfants du projet

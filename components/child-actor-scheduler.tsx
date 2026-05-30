@@ -1073,6 +1073,14 @@ function ShareModal({ project, onClose, onGenerate, onSetPassword, onRevoke }: {
 
   const token = project.share_token;
   const baseUrl = typeof window !== "undefined" ? `${window.location.origin}/share/${token}` : "";
+  const MIN_PWD = 4;
+  const trimmedPwd = password.trim();
+  const savedPwd = project.share_password ?? "";
+  const hasPwd = savedPwd.length >= MIN_PWD;
+  const pwdValid = trimmedPwd.length >= MIN_PWD;
+  const pwdDirty = trimmedPwd !== savedPwd;
+  // Le lien n'est exploitable que si un mot de passe est sauvegardé
+  const linkActive = !!token && hasPwd;
 
   useEffect(() => {
     if (!token || !showLog) return;
@@ -1105,10 +1113,16 @@ function ShareModal({ project, onClose, onGenerate, onSetPassword, onRevoke }: {
   }
 
   async function handleGenerate() {
-    setLoading(true); await onGenerate(); setLoading(false);
+    if (!pwdValid) return;
+    setLoading(true);
+    // S'assurer que le mot de passe est bien sauvegardé avant de générer
+    if (pwdDirty) await onSetPassword(trimmedPwd);
+    await onGenerate();
+    setLoading(false);
   }
   async function handleSavePassword() {
-    setLoading(true); await onSetPassword(password.trim() || null); setLoading(false);
+    if (!pwdValid) return;
+    setLoading(true); await onSetPassword(trimmedPwd); setLoading(false);
   }
   async function handleRevoke() {
     if (!confirm("Désactiver le lien de partage ? Il ne sera plus accessible.")) return;
@@ -1126,53 +1140,62 @@ function ShareModal({ project, onClose, onGenerate, onSetPassword, onRevoke }: {
           <h2 className="font-bold text-white" style={{ fontFamily: "Syne, sans-serif" }}>🔗 Lien de partage</h2>
           <button onClick={onClose} className="text-slate-400 hover:text-white w-8 h-8 flex items-center justify-center">✕</button>
         </div>
-        <p className="text-xs text-slate-400">Partagez ce projet en lecture seule (calendrier + enfants). Le destinataire ne peut rien modifier.</p>
+        <p className="text-xs text-slate-400">Partagez ce projet en lecture seule (calendrier + enfants). Le destinataire ne peut rien modifier. Un <b>mot de passe est obligatoire</b> pour protéger les données.</p>
 
+        {/* Étape 1 : mot de passe (toujours visible et obligatoire) */}
+        <div className="space-y-2">
+          <label className="text-[10px] text-slate-400 uppercase tracking-wider">Mot de passe <span className="text-red-400 normal-case font-normal">(obligatoire, min. {MIN_PWD} caractères)</span></label>
+          <div className="flex gap-2">
+            <div className="flex-1 relative">
+              <input
+                type={showPwd ? "text" : "password"}
+                placeholder="Définir un mot de passe…"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-600 rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:border-blue-500 placeholder:text-slate-600 pr-10"
+              />
+              <button type="button" onClick={() => setShowPwd(v => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs">
+                {showPwd ? "🙈" : "👁"}
+              </button>
+            </div>
+            <button onClick={handleSavePassword} disabled={loading || !pwdValid || !pwdDirty}
+              className="bg-blue-700 hover:bg-blue-600 text-white px-3 rounded-xl text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+              {loading ? "…" : "Enregistrer"}
+            </button>
+          </div>
+          {trimmedPwd.length > 0 && !pwdValid && <div className="text-[10px] text-red-400">Le mot de passe doit faire au moins {MIN_PWD} caractères.</div>}
+          {hasPwd && !pwdDirty && <div className="text-[10px] text-emerald-400">🔒 Mot de passe défini</div>}
+        </div>
+
+        {/* Étape 2 : générer / afficher le lien */}
         {!token ? (
-          <button onClick={handleGenerate} disabled={loading}
-            className="w-full bg-blue-700 hover:bg-blue-600 text-white font-semibold py-3 rounded-xl text-sm transition-colors disabled:opacity-50">
-            {loading ? "Génération…" : "Générer un lien de partage"}
+          <button onClick={handleGenerate} disabled={loading || !pwdValid}
+            className="w-full bg-blue-700 hover:bg-blue-600 text-white font-semibold py-3 rounded-xl text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+            {loading ? "Génération…" : pwdValid ? "Générer un lien de partage" : "🔒 Définir d'abord un mot de passe"}
           </button>
         ) : (
           <>
-            {/* Link display */}
-            <div className="bg-slate-900/70 border border-slate-700 rounded-xl p-3 flex items-center gap-2">
+            {/* Avertissement si le projet a un token mais aucun mot de passe enregistré */}
+            {!hasPwd && (
+              <div className="bg-red-950/40 border border-red-800/60 rounded-xl px-3 py-2.5 text-xs text-red-300">
+                ⚠️ <b>Lien actuellement inactif.</b> Définis et enregistre un mot de passe ci-dessus pour l&apos;activer.
+              </div>
+            )}
+
+            {/* Affichage du lien */}
+            <div className={`bg-slate-900/70 border rounded-xl p-3 flex items-center gap-2 ${linkActive ? "border-slate-700" : "border-red-900/60 opacity-60"}`}>
               <span className="text-xs text-slate-300 flex-1 truncate font-mono">{baseUrl}</span>
-              <button onClick={handleCopy} className={`text-xs px-2 py-1 rounded-lg font-semibold flex-shrink-0 transition-colors ${copied ? "bg-green-700 text-green-200" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}>
+              <button onClick={handleCopy} disabled={!linkActive}
+                className={`text-xs px-2 py-1 rounded-lg font-semibold flex-shrink-0 transition-colors ${copied ? "bg-green-700 text-green-200" : "bg-slate-700 text-slate-300 hover:bg-slate-600"} disabled:opacity-40 disabled:cursor-not-allowed`}>
                 {copied ? "✓ Copié" : "Copier"}
               </button>
             </div>
 
-            {/* Password */}
-            <div className="space-y-2">
-              <label className="text-[10px] text-slate-400 uppercase tracking-wider">Mot de passe <span className="text-slate-600 normal-case font-normal">(optionnel)</span></label>
-              <div className="flex gap-2">
-                <div className="flex-1 relative">
-                  <input
-                    type={showPwd ? "text" : "password"}
-                    placeholder="Laisser vide = accès libre"
-                    value={password}
-                    onChange={e => setPassword(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-600 rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:border-blue-500 placeholder:text-slate-600 pr-10"
-                  />
-                  <button type="button" onClick={() => setShowPwd(v => !v)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs">
-                    {showPwd ? "🙈" : "👁"}
-                  </button>
-                </div>
-                <button onClick={handleSavePassword} disabled={loading}
-                  className="bg-blue-700 hover:bg-blue-600 text-white px-3 rounded-xl text-sm font-semibold disabled:opacity-50 transition-colors">
-                  {loading ? "…" : "OK"}
-                </button>
-              </div>
-              {project.share_password && <div className="text-[10px] text-amber-400">🔒 Protégé par mot de passe</div>}
-              {!project.share_password && <div className="text-[10px] text-green-400">🌐 Accès libre (sans mot de passe)</div>}
-            </div>
-
             {/* Regenerate / Revoke */}
             <div className="flex gap-2 pt-1">
-              <button onClick={handleGenerate} disabled={loading}
-                className="flex-1 text-xs text-slate-400 border border-slate-700 hover:border-slate-500 py-2 rounded-xl transition-colors">
+              <button onClick={handleGenerate} disabled={loading || !pwdValid}
+                className="flex-1 text-xs text-slate-400 border border-slate-700 hover:border-slate-500 py-2 rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
                 🔄 Regénérer
               </button>
               <button onClick={handleRevoke} disabled={loading}
