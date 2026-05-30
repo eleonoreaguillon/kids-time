@@ -7,8 +7,21 @@
 -- ─────────────────────────────────────────────────────────────────────────────
 
 -- L'ancienne version peut avoir un type de retour différent (json, record, ...)
--- → on supprime d'abord pour pouvoir recréer proprement.
-DROP FUNCTION IF EXISTS public.get_project_by_token(uuid, text);
+-- ou une signature légèrement différente. On supprime TOUTES les surcharges
+-- existantes pour pouvoir recréer proprement.
+DO $cleanup$
+DECLARE r record;
+BEGIN
+  FOR r IN
+    SELECT oid::regprocedure AS sig
+    FROM pg_proc
+    WHERE proname = 'get_project_by_token'
+      AND pronamespace = 'public'::regnamespace
+  LOOP
+    EXECUTE 'DROP FUNCTION ' || r.sig || ' CASCADE';
+  END LOOP;
+END
+$cleanup$;
 
 CREATE OR REPLACE FUNCTION public.get_project_by_token(
   p_token   uuid,
