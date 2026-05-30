@@ -265,9 +265,11 @@ export default function SharePage({ params }: { params: Promise<{ token: string 
 
   async function fetchProject(pwd?: string) {
     setStatus("loading");
-    const { data, error } = await supabase.rpc("get_project_by_token", { p_token: token, p_password: pwd ?? null });
+    const ua = typeof navigator !== "undefined" ? navigator.userAgent.slice(0, 250) : null;
+    const { data, error } = await supabase.rpc("get_project_by_token", { p_token: token, p_password: pwd ?? null, p_user_agent: ua });
     if (error || !data) { setErrorMsg("Erreur lors du chargement."); setStatus("error"); return; }
     if (data.error === "not_found") { setErrorMsg("Ce lien de partage n'existe pas ou a été désactivé."); setStatus("error"); return; }
+    if (data.error === "rate_limited") { setErrorMsg("Trop de tentatives échouées. Réessaie dans une quinzaine de minutes."); setStatus("error"); return; }
     if (data.error === "password_required") { setStatus("password"); return; }
     if (data.error === "wrong_password") { setPwdError("Mot de passe incorrect."); setStatus("password"); return; }
     setProject(normalizeProject(data));

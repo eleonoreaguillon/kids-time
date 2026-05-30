@@ -1068,9 +1068,41 @@ function ShareModal({ project, onClose, onGenerate, onSetPassword, onRevoke }: {
   const [password, setPassword] = useState(project.share_password ?? "");
   const [copied, setCopied] = useState(false);
   const [showPwd, setShowPwd] = useState(false);
+  const [accessLog, setAccessLog] = useState<{ result: string; user_agent: string | null; accessed_at: string }[] | null>(null);
+  const [showLog, setShowLog] = useState(false);
 
   const token = project.share_token;
   const baseUrl = typeof window !== "undefined" ? `${window.location.origin}/share/${token}` : "";
+
+  useEffect(() => {
+    if (!token || !showLog) return;
+    (async () => {
+      const { data } = await supabase.rpc("get_share_access_history", { p_project_id: project.id, p_limit: 20 });
+      setAccessLog(data || []);
+    })();
+  }, [token, showLog, project.id]);
+
+  const resultLabels: Record<string, { label: string; color: string }> = {
+    ok: { label: "✓ Accès", color: "text-green-400" },
+    wrong_password: { label: "✗ Mauvais mot de passe", color: "text-amber-400" },
+    password_required: { label: "🔒 Mot de passe demandé", color: "text-slate-400" },
+    not_found: { label: "❓ Lien inconnu", color: "text-slate-500" },
+    rate_limited: { label: "🚫 Bloqué (trop d'essais)", color: "text-red-400" },
+  };
+
+  function shortUA(ua: string | null): string {
+    if (!ua) return "—";
+    if (/iPhone|iPad/.test(ua)) return "📱 iOS";
+    if (/Android/.test(ua)) return "📱 Android";
+    if (/Mac/.test(ua)) return "💻 Mac";
+    if (/Windows/.test(ua)) return "💻 Windows";
+    if (/Linux/.test(ua)) return "💻 Linux";
+    return ua.slice(0, 30);
+  }
+  function formatAccessTime(iso: string): string {
+    const d = new Date(iso);
+    return d.toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  }
 
   async function handleGenerate() {
     setLoading(true); await onGenerate(); setLoading(false);
@@ -1147,6 +1179,31 @@ function ShareModal({ project, onClose, onGenerate, onSetPassword, onRevoke }: {
                 className="flex-1 text-xs text-red-400 border border-red-900/50 hover:border-red-700 py-2 rounded-xl transition-colors">
                 🚫 Désactiver
               </button>
+            </div>
+
+            {/* Historique des accès */}
+            <div className="border-t border-slate-800 pt-3">
+              <button onClick={() => setShowLog(v => !v)} className="text-xs text-slate-400 hover:text-white w-full text-left flex items-center justify-between">
+                <span>📜 Historique des accès</span>
+                <span className="text-slate-600">{showLog ? "▾" : "▸"}</span>
+              </button>
+              {showLog && (
+                <div className="mt-3 max-h-56 overflow-y-auto space-y-1">
+                  {accessLog === null && <div className="text-xs text-slate-500">Chargement…</div>}
+                  {accessLog && accessLog.length === 0 && <div className="text-xs text-slate-500">Aucun accès enregistré pour le moment.</div>}
+                  {accessLog && accessLog.map((row, i) => {
+                    const lbl = resultLabels[row.result] ?? { label: row.result, color: "text-slate-400" };
+                    return (
+                      <div key={i} className="flex items-center justify-between gap-2 text-[10px] bg-slate-900/40 border border-slate-800 rounded-lg px-2 py-1.5">
+                        <span className={`${lbl.color} font-semibold whitespace-nowrap`}>{lbl.label}</span>
+                        <span className="text-slate-500 flex-shrink-0">{shortUA(row.user_agent)}</span>
+                        <span className="text-slate-600 font-mono flex-shrink-0">{formatAccessTime(row.accessed_at)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              <div className="text-[10px] text-slate-600 mt-2">Blocage automatique après 10 tentatives de mot de passe ratées en 15 min.</div>
             </div>
           </>
         )}
