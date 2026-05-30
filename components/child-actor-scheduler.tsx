@@ -1252,6 +1252,7 @@ function ShareModal({ project, onClose, onGenerate, onSetPassword, onRevoke }: {
 
 function HomeView({ projects, userEmail, onCreate, onOpen, onSignOut }: { projects: Project[]; userEmail: string; onCreate: (n: string) => void; onOpen: (id: string) => void; onSignOut: () => void }) {
   const [name, setName] = useState("");
+  const [showRgpd, setShowRgpd] = useState(false);
   return (
     <div className="min-h-screen bg-[#080d16] text-white" style={{ fontFamily: "'DM Mono', monospace" }}>
       <div className="fixed inset-0 opacity-[0.025]" style={{ backgroundImage: "linear-gradient(#fff 1px,transparent 1px),linear-gradient(90deg,#fff 1px,transparent 1px)", backgroundSize: "40px 40px" }} />
@@ -1282,6 +1283,91 @@ function HomeView({ projects, userEmail, onCreate, onOpen, onSignOut }: { projec
             ))}
           </div>
         }
+
+        {/* Footer : RGPD + mentions légales */}
+        <div className="mt-12 pt-6 border-t border-slate-800 flex flex-col items-center gap-3 text-[10px] text-slate-500">
+          <div className="flex gap-4">
+            <a href="/legal" className="hover:text-slate-300 transition-colors">Mentions légales & Confidentialité</a>
+            <span className="text-slate-700">·</span>
+            <button onClick={() => setShowRgpd(true)} className="hover:text-red-400 transition-colors">Supprimer toutes mes données</button>
+          </div>
+          <div className="text-slate-700">KidsTime · ACMA Fiction · Éléonore Aguillon</div>
+        </div>
+      </div>
+
+      {showRgpd && <RgpdDeleteModal onClose={() => setShowRgpd(false)} onSignOut={onSignOut} />}
+    </div>
+  );
+}
+
+function RgpdDeleteModal({ onClose, onSignOut }: { onClose: () => void; onSignOut: () => void }) {
+  const [confirm, setConfirm] = useState("");
+  const [status, setStatus] = useState<"idle" | "loading" | "done" | "error">("idle");
+  const [result, setResult] = useState<{ deleted_projects?: number; deleted_push_subscriptions?: number } | null>(null);
+  const [errMsg, setErrMsg] = useState("");
+
+  async function handleDelete() {
+    if (confirm !== "SUPPRIMER") return;
+    setStatus("loading");
+    const { data, error } = await supabase.rpc("delete_all_my_data");
+    if (error) { setStatus("error"); setErrMsg(error.message); return; }
+    setResult(data || {}); setStatus("done");
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm px-4 pb-4" onClick={status === "done" ? undefined : onClose}>
+      <div className="bg-[#0f1a2e] border border-red-900/60 rounded-2xl w-full max-w-md p-5 space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h2 className="font-bold text-red-400" style={{ fontFamily: "Syne, sans-serif" }}>⚠️ Supprimer toutes mes données</h2>
+          {status !== "done" && <button onClick={onClose} className="text-slate-400 hover:text-white w-8 h-8 flex items-center justify-center">✕</button>}
+        </div>
+
+        {status === "idle" || status === "loading" || status === "error" ? (
+          <>
+            <p className="text-sm text-slate-300">
+              Cette action efface <b>définitivement</b> tous tes projets, enfants, journées de tournage,
+              groupes, logs d&apos;accès et abonnements push. Elle est irréversible.
+            </p>
+            <p className="text-xs text-slate-400">
+              Note : ton compte d&apos;authentification (email) n&apos;est pas effacé par cette action. Pour le supprimer aussi,
+              écris-nous à <a href="mailto:eleonore.aguillon@gmail.com" className="text-blue-400 hover:text-blue-300">eleonore.aguillon@gmail.com</a>.
+            </p>
+            <div className="space-y-2">
+              <label className="text-[10px] text-slate-400 uppercase tracking-wider">Tape <span className="text-red-400 font-bold">SUPPRIMER</span> pour confirmer</label>
+              <input
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:border-red-500 placeholder:text-slate-600"
+                value={confirm}
+                onChange={e => setConfirm(e.target.value)}
+                placeholder="SUPPRIMER"
+                autoFocus
+              />
+            </div>
+            {status === "error" && <div className="text-xs text-red-400">Erreur : {errMsg}</div>}
+            <button
+              onClick={handleDelete}
+              disabled={confirm !== "SUPPRIMER" || status === "loading"}
+              className={`w-full py-3 rounded-xl text-sm font-bold transition-colors ${confirm === "SUPPRIMER" && status !== "loading" ? "bg-red-700 hover:bg-red-600 text-white" : "bg-slate-800 text-slate-600 cursor-not-allowed"}`}
+            >
+              {status === "loading" ? "Suppression…" : "Supprimer définitivement"}
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="bg-emerald-950/30 border border-emerald-800/60 rounded-xl p-4 text-sm space-y-1">
+              <div className="text-emerald-300 font-bold">✓ Suppression effectuée</div>
+              <div className="text-xs text-slate-400">
+                {result?.deleted_projects ?? 0} projet(s) supprimé(s)
+                {result?.deleted_push_subscriptions ? `, ${result.deleted_push_subscriptions} abonnement(s) push supprimé(s)` : ""}.
+              </div>
+            </div>
+            <button
+              onClick={() => { onClose(); onSignOut(); }}
+              className="w-full bg-blue-700 hover:bg-blue-600 text-white py-3 rounded-xl text-sm font-bold transition-colors"
+            >
+              Se déconnecter
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
