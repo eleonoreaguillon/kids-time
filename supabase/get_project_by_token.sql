@@ -86,7 +86,10 @@ BEGIN
     RETURN jsonb_build_object('error', 'password_required');
   END IF;
 
-  IF p_password <> v_project.share_password THEN
+  -- Verifie le mot de passe via crypt() (bcrypt). En fallback on accepte
+  -- aussi l'egalite directe au cas ou une valeur legacy en clair subsisterait.
+  IF v_project.share_password <> crypt(p_password, v_project.share_password)
+     AND p_password <> v_project.share_password THEN
     INSERT INTO share_access_log (project_id, share_token, result, user_agent)
     VALUES (v_project.id, p_token, 'wrong_password', p_user_agent);
     RETURN jsonb_build_object('error', 'wrong_password');

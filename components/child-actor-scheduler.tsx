@@ -71,7 +71,8 @@ export interface Project {
   groups: Group[];
   shootingDays: Record<string, ShootingDay>;
   share_token?: string | null;
-  share_password?: string | null;
+  /** Indique seulement si un mot de passe est defini, jamais sa valeur. */
+  share_password_set?: boolean;
 }
 
 export interface SessionStats {
@@ -815,7 +816,11 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     const shootingDays: Record<string, ShootingDay> = {};
     (days || []).forEach((d: ShootingDay) => { shootingDays[d.date] = d; });
     const mappedChildren = (children || []).map((c: any) => ({ ...c, role: c.child_role ?? undefined }));
-    return { ...proj, children: mappedChildren, groups: groups || [], shootingDays };
+    // Derive un booleen et evite d exposer le hash bcrypt aux composants enfants
+    const projAny: any = { ...(proj || {}) };
+    const share_password_set = !!projAny.share_password;
+    delete projAny.share_password;
+    return { ...projAny, share_password_set, children: mappedChildren, groups: groups || [], shootingDays };
   }
 
   async function openProject(id: string) {
@@ -852,11 +857,15 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     return token;
   }
   async function setSharePassword(projectId: string, password: string | null) {
-    await supabase.from("projects").update({ share_password: password || null }).eq("id", projectId);
+    // Passe par une RPC qui hash le mot de passe cote serveur (bcrypt).
+    // Le client ne stocke jamais la valeur en clair en base.
+    const { error } = await supabase.rpc("set_project_share_password", { p_project_id: projectId, p_password: password });
+    if (error) throw error;
     await refreshActive();
   }
   async function revokeShareToken(projectId: string) {
-    await supabase.from("projects").update({ share_token: null, share_password: null }).eq("id", projectId);
+    await supabase.from("projects").update({ share_token: null }).eq("id", projectId);
+    await supabase.rpc("set_project_share_password", { p_project_id: projectId, p_password: null });
     await refreshActive();
   }
 
@@ -1065,7 +1074,8 @@ function ShareModal({ project, onClose, onGenerate, onSetPassword, onRevoke }: {
   onRevoke: () => Promise<void>;
 }) {
   const [loading, setLoading] = useState(false);
-  const [password, setPassword] = useState(project.share_password ?? "");
+  // On ne pre-remplit jamais le champ : le mot de passe est hashe en base.
+  const [password, setPassword] = useState("");
   const [copied, setCopied] = useState(false);
   const [showPwd, setShowPwd] = useState(false);
   const [accessLog, setAccessLog] = useState<{ result: string; user_agent: string | null; accessed_at: string }[] | null>(null);
@@ -1075,10 +1085,10 @@ function ShareModal({ project, onClose, onGenerate, onSetPassword, onRevoke }: {
   const baseUrl = typeof window !== "undefined" ? `${window.location.origin}/share/${token}` : "";
   const MIN_PWD = 4;
   const trimmedPwd = password.trim();
-  const savedPwd = project.share_password ?? "";
-  const hasPwd = savedPwd.length >= MIN_PWD;
+  const hasPwd = !!project.share_password_set;
   const pwdValid = trimmedPwd.length >= MIN_PWD;
-  const pwdDirty = trimmedPwd !== savedPwd;
+  // L utilisateur a-t-il deja saisi quelque chose dans le champ ?
+  const pwdDirty = trimmedPwd.length > 0;
   // Le lien n'est exploitable que si un mot de passe est sauvegardé
   const linkActive = !!token && hasPwd;
 
@@ -1113,16 +1123,20 @@ function ShareModal({ project, onClose, onGenerate, onSetPassword, onRevoke }: {
   }
 
   async function handleGenerate() {
-    if (!pwdValid) return;
+    // Conditions: doit avoir soit un mot de passe deja enregistre, soit un
+    // nouveau valide a la volee
+    if (!hasPwd && !pwdValid) return;
     setLoading(true);
-    // S'assurer que le mot de passe est bien sauvegardé avant de générer
-    if (pwdDirty) await onSetPassword(trimmedPwd);
+    if (pwdValid) { await onSetPassword(trimmedPwd); setPassword(""); }
     await onGenerate();
     setLoading(false);
   }
   async function handleSavePassword() {
     if (!pwdValid) return;
-    setLoading(true); await onSetPassword(trimmedPwd); setLoading(false);
+    setLoading(true);
+    await onSetPassword(trimmedPwd);
+    setPassword(""); // on vide le champ apres enregistrement
+    setLoading(false);
   }
   async function handleRevoke() {
     if (!confirm("Désactiver le lien de partage ? Il ne sera plus accessible.")) return;
@@ -1149,7 +1163,7 @@ function ShareModal({ project, onClose, onGenerate, onSetPassword, onRevoke }: {
             <div className="flex-1 relative">
               <input
                 type={showPwd ? "text" : "password"}
-                placeholder="Définir un mot de passe…"
+                placeholder={hasPwd ? "Saisir un nouveau mot de passe pour le changer" : "Définir un mot de passe…"}
                 value={password}
                 onChange={e => setPassword(e.target.value)}
                 className="w-full bg-slate-800 border border-slate-600 rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:border-blue-500 placeholder:text-slate-600 pr-10"
@@ -1159,20 +1173,21 @@ function ShareModal({ project, onClose, onGenerate, onSetPassword, onRevoke }: {
                 {showPwd ? "🙈" : "👁"}
               </button>
             </div>
-            <button onClick={handleSavePassword} disabled={loading || !pwdValid || !pwdDirty}
+            <button onClick={handleSavePassword} disabled={loading || !pwdValid}
               className="bg-blue-700 hover:bg-blue-600 text-white px-3 rounded-xl text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
               {loading ? "…" : "Enregistrer"}
             </button>
           </div>
-          {trimmedPwd.length > 0 && !pwdValid && <div className="text-[10px] text-red-400">Le mot de passe doit faire au moins {MIN_PWD} caractères.</div>}
-          {hasPwd && !pwdDirty && <div className="text-[10px] text-emerald-400">🔒 Mot de passe défini</div>}
+          {pwdDirty && !pwdValid && <div className="text-[10px] text-red-400">Le mot de passe doit faire au moins {MIN_PWD} caractères.</div>}
+          {hasPwd && !pwdDirty && <div className="text-[10px] text-emerald-400">🔒 Mot de passe défini (chiffré en base)</div>}
+          {!hasPwd && !pwdDirty && <div className="text-[10px] text-red-400">⚠️ Aucun mot de passe défini — le lien ne fonctionnera pas tant qu&apos;il n&apos;y en a pas un.</div>}
         </div>
 
         {/* Étape 2 : générer / afficher le lien */}
         {!token ? (
-          <button onClick={handleGenerate} disabled={loading || !pwdValid}
+          <button onClick={handleGenerate} disabled={loading || (!hasPwd && !pwdValid)}
             className="w-full bg-blue-700 hover:bg-blue-600 text-white font-semibold py-3 rounded-xl text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
-            {loading ? "Génération…" : pwdValid ? "Générer un lien de partage" : "🔒 Définir d'abord un mot de passe"}
+            {loading ? "Génération…" : (hasPwd || pwdValid) ? "Générer un lien de partage" : "🔒 Définir d'abord un mot de passe"}
           </button>
         ) : (
           <>
