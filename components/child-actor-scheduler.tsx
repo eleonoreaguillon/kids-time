@@ -1295,45 +1295,69 @@ function HomeView({ projects, userEmail, onCreate, onOpen, onSignOut }: { projec
         </div>
       </div>
 
-      {showRgpd && <RgpdDeleteModal onClose={() => setShowRgpd(false)} onSignOut={onSignOut} />}
+      {showRgpd && <RgpdDeleteModal onClose={() => setShowRgpd(false)} userEmail={userEmail} />}
     </div>
   );
 }
 
-function RgpdDeleteModal({ onClose, onSignOut }: { onClose: () => void; onSignOut: () => void }) {
+function RgpdDeleteModal({ onClose, userEmail }: { onClose: () => void; userEmail: string }) {
+  type Step = "step1" | "step2" | "sending" | "sent" | "error";
+  const [step, setStep] = useState<Step>("step1");
   const [confirm, setConfirm] = useState("");
-  const [status, setStatus] = useState<"idle" | "loading" | "done" | "error">("idle");
-  const [result, setResult] = useState<{ deleted_projects?: number; deleted_push_subscriptions?: number } | null>(null);
+  const [understood, setUnderstood] = useState(false);
   const [errMsg, setErrMsg] = useState("");
 
-  async function handleDelete() {
-    if (confirm !== "SUPPRIMER") return;
-    setStatus("loading");
-    const { data, error } = await supabase.rpc("delete_all_my_data");
-    if (error) { setStatus("error"); setErrMsg(error.message); return; }
-    setResult(data || {}); setStatus("done");
+  const canContinueStep1 = confirm === "SUPPRIMER" && understood;
+
+  async function handleSendEmail() {
+    setStep("sending");
+    try {
+      // 1. Genere un token cote serveur
+      const { data: token, error: tokErr } = await supabase.rpc("request_data_deletion");
+      if (tokErr || !token) throw new Error(tokErr?.message || "Token introuvable");
+
+      // 2. Envoie un magic link Supabase qui redirige vers la page de confirmation avec le token
+      const redirectTo = `${window.location.origin}/confirm-deletion?token=${token}`;
+      const { error: otpErr } = await supabase.auth.signInWithOtp({
+        email: userEmail,
+        options: { emailRedirectTo: redirectTo, shouldCreateUser: false },
+      });
+      if (otpErr) throw otpErr;
+
+      setStep("sent");
+    } catch (e: any) {
+      setErrMsg(e?.message || "Erreur lors de l'envoi");
+      setStep("error");
+    }
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm px-4 pb-4" onClick={status === "done" ? undefined : onClose}>
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm px-4 pb-4" onClick={step === "sending" ? undefined : onClose}>
       <div className="bg-[#0f1a2e] border border-red-900/60 rounded-2xl w-full max-w-md p-5 space-y-4" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h2 className="font-bold text-red-400" style={{ fontFamily: "Syne, sans-serif" }}>⚠️ Supprimer toutes mes données</h2>
-          {status !== "done" && <button onClick={onClose} className="text-slate-400 hover:text-white w-8 h-8 flex items-center justify-center">✕</button>}
+          {step !== "sending" && <button onClick={onClose} className="text-slate-400 hover:text-white w-8 h-8 flex items-center justify-center">✕</button>}
         </div>
 
-        {status === "idle" || status === "loading" || status === "error" ? (
+        {/* Indicateur d'étape */}
+        <div className="flex items-center gap-1.5 text-[10px] text-slate-500">
+          <span className={step === "step1" ? "text-red-400 font-bold" : ""}>1. Confirmer</span>
+          <span>›</span>
+          <span className={step === "step2" || step === "sending" ? "text-red-400 font-bold" : ""}>2. Récapitulatif</span>
+          <span>›</span>
+          <span className={step === "sent" ? "text-red-400 font-bold" : ""}>3. Email</span>
+          <span>›</span>
+          <span className="text-slate-600">4. Lien</span>
+        </div>
+
+        {step === "step1" && (
           <>
             <p className="text-sm text-slate-300">
               Cette action efface <b>définitivement</b> tous tes projets, enfants, journées de tournage,
               groupes, logs d&apos;accès et abonnements push. Elle est irréversible.
             </p>
-            <p className="text-xs text-slate-400">
-              Note : ton compte d&apos;authentification (email) n&apos;est pas effacé par cette action. Pour le supprimer aussi,
-              écris-nous à <a href="mailto:eleonore.aguillon@gmail.com" className="text-blue-400 hover:text-blue-300">eleonore.aguillon@gmail.com</a>.
-            </p>
             <div className="space-y-2">
-              <label className="text-[10px] text-slate-400 uppercase tracking-wider">Tape <span className="text-red-400 font-bold">SUPPRIMER</span> pour confirmer</label>
+              <label className="text-[10px] text-slate-400 uppercase tracking-wider">Tape <span className="text-red-400 font-bold">SUPPRIMER</span> pour activer</label>
               <input
                 className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:border-red-500 placeholder:text-slate-600"
                 value={confirm}
@@ -1342,29 +1366,94 @@ function RgpdDeleteModal({ onClose, onSignOut }: { onClose: () => void; onSignOu
                 autoFocus
               />
             </div>
-            {status === "error" && <div className="text-xs text-red-400">Erreur : {errMsg}</div>}
+            <label className="flex items-start gap-2 text-xs text-slate-300 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={understood}
+                onChange={e => setUnderstood(e.target.checked)}
+                className="mt-0.5 w-4 h-4 accent-red-500"
+              />
+              <span>Je comprends que la suppression est irréversible.</span>
+            </label>
             <button
-              onClick={handleDelete}
-              disabled={confirm !== "SUPPRIMER" || status === "loading"}
-              className={`w-full py-3 rounded-xl text-sm font-bold transition-colors ${confirm === "SUPPRIMER" && status !== "loading" ? "bg-red-700 hover:bg-red-600 text-white" : "bg-slate-800 text-slate-600 cursor-not-allowed"}`}
+              onClick={() => canContinueStep1 && setStep("step2")}
+              disabled={!canContinueStep1}
+              className={`w-full py-3 rounded-xl text-sm font-bold transition-colors ${canContinueStep1 ? "bg-red-700 hover:bg-red-600 text-white" : "bg-slate-800 text-slate-600 cursor-not-allowed"}`}
             >
-              {status === "loading" ? "Suppression…" : "Supprimer définitivement"}
+              Continuer
             </button>
           </>
-        ) : (
+        )}
+
+        {step === "step2" && (
           <>
-            <div className="bg-emerald-950/30 border border-emerald-800/60 rounded-xl p-4 text-sm space-y-1">
-              <div className="text-emerald-300 font-bold">✓ Suppression effectuée</div>
-              <div className="text-xs text-slate-400">
-                {result?.deleted_projects ?? 0} projet(s) supprimé(s)
-                {result?.deleted_push_subscriptions ? `, ${result.deleted_push_subscriptions} abonnement(s) push supprimé(s)` : ""}.
+            <div className="bg-red-950/30 border border-red-800/60 rounded-xl p-3 text-xs space-y-2">
+              <div className="text-red-300 font-bold">Dernière étape avant l&apos;email</div>
+              <div className="text-slate-300">
+                Un email avec un lien de confirmation va être envoyé à :
+              </div>
+              <div className="bg-slate-900/70 border border-slate-700 rounded-lg px-3 py-2 font-mono text-white text-xs break-all">
+                {userEmail}
+              </div>
+              <div className="text-slate-400">
+                Le lien sera valide <b>1 heure</b>. La suppression ne sera effective qu&apos;après que tu auras cliqué dessus
+                et confirmé une dernière fois.
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setStep("step1")}
+                className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl text-sm font-semibold transition-colors"
+              >
+                ← Retour
+              </button>
+              <button
+                onClick={handleSendEmail}
+                className="flex-1 bg-red-700 hover:bg-red-600 text-white py-3 rounded-xl text-sm font-bold transition-colors"
+              >
+                M&apos;envoyer le lien
+              </button>
+            </div>
+          </>
+        )}
+
+        {step === "sending" && (
+          <div className="text-center py-6">
+            <div className="w-8 h-8 border-2 border-red-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+            <div className="text-sm text-slate-400">Envoi de l&apos;email…</div>
+          </div>
+        )}
+
+        {step === "sent" && (
+          <>
+            <div className="bg-emerald-950/30 border border-emerald-800/60 rounded-xl p-4 text-sm space-y-2">
+              <div className="text-emerald-300 font-bold">📩 Email envoyé</div>
+              <div className="text-xs text-slate-300">
+                Un lien de confirmation a été envoyé à <b className="text-white">{userEmail}</b>. Clique dessus pour finaliser la suppression.
+              </div>
+              <div className="text-[10px] text-slate-500">
+                Pense à vérifier tes spams. Validité : 1 heure.
               </div>
             </div>
             <button
-              onClick={() => { onClose(); onSignOut(); }}
-              className="w-full bg-blue-700 hover:bg-blue-600 text-white py-3 rounded-xl text-sm font-bold transition-colors"
+              onClick={onClose}
+              className="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl text-sm font-semibold transition-colors"
             >
-              Se déconnecter
+              Fermer
+            </button>
+          </>
+        )}
+
+        {step === "error" && (
+          <>
+            <div className="bg-red-950/40 border border-red-800/60 rounded-xl p-3 text-xs text-red-300">
+              Erreur : {errMsg}
+            </div>
+            <button
+              onClick={() => setStep("step2")}
+              className="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl text-sm font-semibold transition-colors"
+            >
+              Réessayer
             </button>
           </>
         )}
