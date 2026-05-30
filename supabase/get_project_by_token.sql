@@ -6,6 +6,10 @@
 -- d'agrégation entre journées). Le share_password n'est jamais renvoyé.
 -- ─────────────────────────────────────────────────────────────────────────────
 
+-- L'ancienne version peut avoir un type de retour différent (json, record, ...)
+-- → on supprime d'abord pour pouvoir recréer proprement.
+DROP FUNCTION IF EXISTS public.get_project_by_token(uuid, text);
+
 CREATE OR REPLACE FUNCTION public.get_project_by_token(
   p_token   uuid,
   p_password text DEFAULT NULL
