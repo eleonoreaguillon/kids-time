@@ -34,6 +34,7 @@ export interface Child {
   role?: ChildRole;
   archived?: boolean; // fix #3
   derogations?: Derogation[];
+  school_tracking?: boolean; // active le bouton "📚 Suivi scolaire" pour cet enfant
 }
 
 export interface Group {
@@ -43,12 +44,12 @@ export interface Group {
   child_ids: string[];
 }
 
-export interface SessionEvent { type: "pause_start" | "pause_end" | "dejeuner_start" | "dejeuner_end"; time: string; }
+export interface SessionEvent { type: "pause_start" | "pause_end" | "dejeuner_start" | "dejeuner_end" | "school_start" | "school_end"; time: string; }
 
 export interface Session {
   start_time?: string;
   end_time?: string;
-  status?: "working" | "paused" | "dejeuner" | "done";
+  status?: "working" | "paused" | "dejeuner" | "school" | "done";
   events?: SessionEvent[];
 }
 
@@ -79,10 +80,11 @@ export interface SessionStats {
   breakMin: number;
   validBreakMin: number;
   dejeunerMin: number;
+  schoolMin: number;
   timeSinceBreak: number | null;
   start: Date;
   now: Date;
-  breakSlots: { start: string; end: string; durationMin: number; valid: boolean; kind: "pause" | "dejeuner" }[];
+  breakSlots: { start: string; end: string; durationMin: number; valid: boolean; kind: "pause" | "dejeuner" | "school" }[];
 }
 
 const DEFAULT_RULES: Rules = {
@@ -202,11 +204,11 @@ export function computeSessionStats(session: Session | undefined, rules: Rules):
   const start = new Date(session.start_time);
   const amplitudeMin = Math.floor((now.getTime() - start.getTime()) / 60000);
   const events = session.events || [];
-  let workMin = 0, breakMin = 0, validBreakMin = 0, dejeunerMin = 0, lastRef = start;
+  let workMin = 0, breakMin = 0, validBreakMin = 0, dejeunerMin = 0, schoolMin = 0, lastRef = start;
   const breakSlots: SessionStats["breakSlots"] = [];
   for (const ev of events) {
     const t = new Date(ev.time), dur = Math.floor((t.getTime() - lastRef.getTime()) / 60000);
-    if (ev.type === "pause_start" || ev.type === "dejeuner_start") {
+    if (ev.type === "pause_start" || ev.type === "dejeuner_start" || ev.type === "school_start") {
       workMin += dur; lastRef = t;
     } else if (ev.type === "pause_end") {
       const valid = dur >= rules.minBreakMinutes;
@@ -216,6 +218,9 @@ export function computeSessionStats(session: Session | undefined, rules: Rules):
     } else if (ev.type === "dejeuner_end") {
       breakSlots.push({ start: lastRef.toISOString(), end: t.toISOString(), durationMin: dur, valid: true, kind: "dejeuner" });
       dejeunerMin += dur; lastRef = t;
+    } else if (ev.type === "school_end") {
+      breakSlots.push({ start: lastRef.toISOString(), end: t.toISOString(), durationMin: dur, valid: false, kind: "school" });
+      schoolMin += dur; lastRef = t;
     }
   }
   const lastDur = Math.floor((now.getTime() - lastRef.getTime()) / 60000);
@@ -227,15 +232,18 @@ export function computeSessionStats(session: Session | undefined, rules: Rules):
   } else if (session.status === "dejeuner") {
     breakSlots.push({ start: lastRef.toISOString(), end: now.toISOString(), durationMin: lastDur, valid: true, kind: "dejeuner" });
     dejeunerMin += lastDur;
+  } else if (session.status === "school") {
+    breakSlots.push({ start: lastRef.toISOString(), end: now.toISOString(), durationMin: lastDur, valid: false, kind: "school" });
+    schoolMin += lastDur;
   } else {
     workMin += lastDur;
   }
   let timeSinceBreak: number | null = null;
   if (session.status === "working") {
-    const last = [...events].reverse().find(e => e.type === "pause_end" || e.type === "dejeuner_end");
+    const last = [...events].reverse().find(e => e.type === "pause_end" || e.type === "dejeuner_end" || e.type === "school_end");
     timeSinceBreak = Math.floor((now.getTime() - new Date(last ? last.time : session.start_time).getTime()) / 60000);
   }
-  return { amplitudeMin, workMin, breakMin, validBreakMin, dejeunerMin, timeSinceBreak, start, now, breakSlots };
+  return { amplitudeMin, workMin, breakMin, validBreakMin, dejeunerMin, schoolMin, timeSinceBreak, start, now, breakSlots };
 }
 
 // ─── Export helpers ──────────────────────────────────────────────────────────
@@ -257,6 +265,7 @@ export function buildExportRows(project: Project, dateStr: string) {
     const ampOver = stats ? Math.max(0, stats.amplitudeMin - maxAmp) : 0;
     const breakSlotsStr = stats?.breakSlots.filter(b => b.valid && b.kind === "pause").map(b => `${formatTime(b.start)}-${formatTime(b.end)} (${formatMinutes(b.durationMin)})`).join(" / ") || "--";
     const dejeunerSlotsStr = stats?.breakSlots.filter(b => b.kind === "dejeuner").map(b => `${formatTime(b.start)}-${formatTime(b.end)} (${formatMinutes(b.durationMin)})`).join(" / ") || "--";
+    const schoolSlotsStr = stats?.breakSlots.filter(b => b.kind === "school").map(b => `${formatTime(b.start)}-${formatTime(b.end)} (${formatMinutes(b.durationMin)})`).join(" / ") || "--";
     rows.push({
       "Nom Prénom": `${child.first_name} ${child.last_name}`.trim(),
       "Statut": child.role ? ROLE_LABELS[child.role] : "--",
@@ -269,6 +278,8 @@ export function buildExportRows(project: Project, dateStr: string) {
       "Dépassement travail": workOver > 0 ? formatMinutes(workOver) : "0",
       "Pause déjeuner": stats ? formatMinutes(stats.dejeunerMin) : "--",
       "Plages déjeuner": dejeunerSlotsStr,
+      "Suivi scolaire": stats ? formatMinutes(stats.schoolMin) : "--",
+      "Plages suivi scolaire": schoolSlotsStr,
       "Durée totale des pauses": stats ? formatMinutes(stats.breakMin) : "--",
       "Pauses valides": stats ? formatMinutes(stats.validBreakMin) : "--",
       "Plages horaires des pauses": breakSlotsStr,
@@ -310,10 +321,13 @@ export function exportDayToPDF(project: Project, dateStr: string) {
     const ampOver = stats ? Math.max(0, stats.amplitudeMin - maxAmp) : 0;
     const bStr = stats?.breakSlots.filter((b: any) => b.valid && b.kind === "pause").map((b: any) => `${formatTime(b.start)}-${formatTime(b.end)} (${formatMinutes(b.durationMin)})`).join("<br>") || "--";
     const dStr = stats?.breakSlots.filter((b: any) => b.kind === "dejeuner").map((b: any) => `${formatTime(b.start)}-${formatTime(b.end)} (${formatMinutes(b.durationMin)})`).join("<br>") || "--";
+    const sStr = stats?.breakSlots.filter((b: any) => b.kind === "school").map((b: any) => `${formatTime(b.start)}-${formatTime(b.end)} (${formatMinutes(b.durationMin)})`).join("<br>") || "--";
+    const showSchool = child.school_tracking || (stats && stats.schoolMin > 0);
     return `<table><tr><th colspan="4">${child.first_name} ${child.last_name}${child.role ? ` — ${ROLE_LABELS[child.role as ChildRole]}` : ""} — ${getAge(child.dob)} ans (${band} ans) — ${vacation ? "Vacances" : "Scolaire"}</th></tr>
       <tr><td><b>Convocation</b><br>${session?.start_time ? formatTime(session.start_time) : "--"}</td><td><b>Fin</b><br>${session?.end_time ? formatTime(session.end_time) : "--"}</td><td><b>Amplitude</b><br>${stats ? formatMinutes(stats.amplitudeMin) : "--"}</td><td><b>Max amplitude</b><br>${formatMinutes(maxAmp)}</td></tr>
       <tr><td><b>Travail total</b><br>${stats ? formatMinutes(stats.workMin) : "--"}</td><td><b>Max travail</b><br>${formatMinutes(maxWork)}</td><td><b>Dépass. travail</b><br><span class="${workOver > 0 ? "over" : "ok"}">${workOver > 0 ? formatMinutes(workOver) : "OK"}</span></td><td><b>Dépass. amplitude</b><br><span class="${ampOver > 0 ? "over" : "ok"}">${ampOver > 0 ? formatMinutes(ampOver) : "OK"}</span></td></tr>
-      <tr><td><b>🍽 Déjeuner</b><br>${stats ? formatMinutes(stats.dejeunerMin) : "--"}</td><td><b>Plages déjeuner</b><br>${dStr}</td><td><b>Pauses valides</b><br>${stats ? formatMinutes(stats.validBreakMin) : "--"}</td><td><b>Plages de pauses</b><br>${bStr}</td></tr></table>`;
+      <tr><td><b>🍽 Déjeuner</b><br>${stats ? formatMinutes(stats.dejeunerMin) : "--"}</td><td><b>Plages déjeuner</b><br>${dStr}</td><td><b>Pauses valides</b><br>${stats ? formatMinutes(stats.validBreakMin) : "--"}</td><td><b>Plages de pauses</b><br>${bStr}</td></tr>
+      ${showSchool ? `<tr><td><b>📚 Suivi scolaire</b><br>${stats ? formatMinutes(stats.schoolMin) : "--"}</td><td colspan="3"><b>Plages suivi scolaire</b><br>${sStr}</td></tr>` : ""}</table>`;
   };
   const allRows = buildExportRows(project, dateStr);
   // Fix #8: add a visible ← Retour button in the PDF page
@@ -357,6 +371,7 @@ export function exportChildAllDays(project: Project, child: Child) {
     const ampOver = stats ? Math.max(0, stats.amplitudeMin - maxAmp) : 0;
     const bStr = stats?.breakSlots.filter(b => b.valid && b.kind === "pause").map((b) => `${formatTime(b.start)}-${formatTime(b.end)} (${formatMinutes(b.durationMin)})`).join(", ") || "--";
     const dStr = stats?.breakSlots.filter(b => b.kind === "dejeuner").map((b) => `🍽 ${formatTime(b.start)}-${formatTime(b.end)} (${formatMinutes(b.durationMin)})`).join(", ") || "--";
+    const sStr = stats?.breakSlots.filter(b => b.kind === "school").map((b) => `📚 ${formatTime(b.start)}-${formatTime(b.end)} (${formatMinutes(b.durationMin)})`).join(", ") || "--";
     const dateLabel = new Date(dateStr + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "short", day: "numeric", month: "short" });
     return `<tr>
       <td>${dateLabel}</td>
@@ -366,8 +381,9 @@ export function exportChildAllDays(project: Project, child: Child) {
       <td><span style="color:${ampOver > 0 ? "#dc2626" : stats && stats.amplitudeMin === maxAmp ? "#ea580c" : "#16a34a"}">${stats ? formatMinutes(stats.amplitudeMin) : "--"} / ${formatMinutes(maxAmp)}</span></td>
       <td><span style="color:${workOver > 0 ? "#dc2626" : "#16a34a"}">${stats ? formatMinutes(stats.workMin) : "--"} / ${formatMinutes(maxWork)}</span></td>
       <td>${stats ? formatMinutes(stats.dejeunerMin) : "--"}</td>
+      ${child.school_tracking ? `<td>${stats ? formatMinutes(stats.schoolMin) : "--"}</td>` : ""}
       <td>${stats ? formatMinutes(stats.validBreakMin) : "--"}</td>
-      <td style="font-size:8px">${dStr ? dStr + " | " : ""}${bStr}</td>
+      <td style="font-size:8px">${dStr ? dStr + " | " : ""}${bStr}${child.school_tracking && stats && stats.schoolMin > 0 ? " | " + sStr : ""}</td>
     </tr>`;
   };
 
@@ -385,7 +401,7 @@ export function exportChildAllDays(project: Project, child: Child) {
   <h1>KidsTime — Journées de ${child.first_name} ${child.last_name}</h1>
   <h2>${child.role ? ROLE_LABELS[child.role] + " · " : ""}${getAge(child.dob)} ans · Tranche ${getAgeBand(child.dob)} ans · ${project.name}</h2>
   <table><thead><tr>
-    <th>Date</th><th>Période</th><th>Début</th><th>Fin</th><th>Amplitude</th><th>Travail / Max</th><th>🍽 Déjeuner</th><th>Pauses valides</th><th>Plages déjeuner / pauses</th>
+    <th>Date</th><th>Période</th><th>Début</th><th>Fin</th><th>Amplitude</th><th>Travail / Max</th><th>🍽 Déjeuner</th>${child.school_tracking ? "<th>📚 Suivi sco.</th>" : ""}<th>Pauses valides</th><th>Plages déjeuner / pauses${child.school_tracking ? " / sco." : ""}</th>
   </tr></thead><tbody>`;
   for (const [dateStr, day] of days) { html += childTable(dateStr, day); }
   html += `</tbody></table>
@@ -430,6 +446,7 @@ export function exportProjectGlobal(project: Project) {
         "Dépass. amplitude": ampOver > 0 ? formatMinutes(ampOver) : "OK",
         "Pauses valides": stats ? formatMinutes(stats.validBreakMin) : "--",
         "Pauses totales": stats ? formatMinutes(stats.breakMin) : "--",
+        "Suivi scolaire": stats ? formatMinutes(stats.schoolMin) : "--",
       });
     }
   }
@@ -443,7 +460,7 @@ export function exportProjectGlobal(project: Project) {
     for (const child of sortByRoleThenAlpha(project.children.filter(c => !c.archived))) {
       const childDays = sortedDates.filter(d => project.shootingDays[d]?.child_ids?.includes(child.id));
       if (childDays.length === 0) continue;
-      let totalWork = 0, totalBreak = 0, totalAmp = 0, depassWork = 0, depassAmp = 0;
+      let totalWork = 0, totalBreak = 0, totalAmp = 0, totalSchool = 0, depassWork = 0, depassAmp = 0;
       for (const dateStr of childDays) {
         const day = project.shootingDays[dateStr];
         const session = day.sessions?.[child.id];
@@ -453,7 +470,7 @@ export function exportProjectGlobal(project: Project) {
         const maxWork = project.rules.maxWorkMinutes[band][period];
         const maxAmp = project.rules.maxAmplitudeMinutes;
         const stats = computeSessionStats(session, project.rules);
-        if (stats) { totalWork += stats.workMin; totalBreak += stats.validBreakMin; totalAmp += stats.amplitudeMin; depassWork += Math.max(0, stats.workMin - maxWork); depassAmp += Math.max(0, stats.amplitudeMin - maxAmp); }
+        if (stats) { totalWork += stats.workMin; totalBreak += stats.validBreakMin; totalAmp += stats.amplitudeMin; totalSchool += stats.schoolMin; depassWork += Math.max(0, stats.workMin - maxWork); depassAmp += Math.max(0, stats.amplitudeMin - maxAmp); }
       }
       childSummary.push({
         "Nom Prénom": `${child.first_name} ${child.last_name}`.trim(),
@@ -463,6 +480,7 @@ export function exportProjectGlobal(project: Project) {
         "Total travail": formatMinutes(totalWork),
         "Total amplitude": formatMinutes(totalAmp),
         "Total pauses valides": formatMinutes(totalBreak),
+        "Total suivi scolaire": formatMinutes(totalSchool),
         "Total dépass. travail": depassWork > 0 ? formatMinutes(depassWork) : "OK",
         "Total dépass. amplitude": depassAmp > 0 ? formatMinutes(depassAmp) : "OK",
       });
@@ -543,12 +561,13 @@ export function exportProjectGlobalPDF(project: Project) {
     const childDates = sortedDates.filter(d => dd[d].inDay);
     if (childDates.length === 0) continue;
 
-    let totWork = 0, totDejeuner = 0, totValidPause = 0, totAmp = 0, totWorkOver = 0, totAmpOver = 0;
+    let totWork = 0, totDejeuner = 0, totValidPause = 0, totSchool = 0, totAmp = 0, totWorkOver = 0, totAmpOver = 0;
     for (const d of childDates) {
       const { stats, maxWork, maxAmp } = dd[d];
       if (stats) {
         totWork += stats.workMin; totDejeuner += stats.dejeunerMin;
         totValidPause += stats.validBreakMin;
+        totSchool += stats.schoolMin;
         totAmp += stats.amplitudeMin;
         totWorkOver += Math.max(0, stats.workMin - maxWork);
         totAmpOver  += Math.max(0, stats.amplitudeMin - maxAmp);
@@ -588,6 +607,7 @@ export function exportProjectGlobalPDF(project: Project) {
         <tr><td ${TDL}>Heure de convocation</td><td ${TDT()}></td>${cells(d => d.session?.start_time ? formatTime(d.session.start_time) : "")}</tr>
         <tr><td ${TDL}>Durée de pause déjeuner</td><td ${TDT()}></td>${cells(d => fmtHHMM(d.stats?.dejeunerMin ?? 0))}</tr>
         <tr><td ${TDL}>Durée des autres pauses</td><td ${TDT()}></td>${cells(d => fmtHHMM(d.stats?.validBreakMin ?? 0))}</tr>
+        ${child.school_tracking || totSchool > 0 ? `<tr><td ${TDL}>📚 Suivi scolaire</td><td ${TDT()}>${fmtHHMM(totSchool)}</td>${cells(d => fmtHHMM(d.stats?.schoolMin ?? 0))}</tr>` : ""}
         <tr>
           <td ${TDL} style="text-align:left;padding:3px 6px;border:1px solid #ccc;font-size:8px;background:#f4f6fb;font-weight:bold;white-space:nowrap">Durée totale de travail (plateau, HMC, attente)</td>
           <td ${TDT()}></td>
@@ -840,28 +860,28 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     await refreshActive();
   }
 
-  async function addChild(child: { fullName: string; dob: string; vacationPeriods: VacationPeriod[]; role: ChildRole | null; derogations?: Derogation[] }) {
+  async function addChild(child: { fullName: string; dob: string; vacationPeriods: VacationPeriod[]; role: ChildRole | null; derogations?: Derogation[]; schoolTracking?: boolean }) {
     const { firstName, lastName } = splitFullName(child.fullName);
     const { error } = await supabase.from("children").insert({
       project_id: activeProject!.id, first_name: firstName, last_name: lastName,
       dob: child.dob, vacation_periods: child.vacationPeriods || [], child_role: child.role ?? null,
-      derogations: child.derogations || [],
+      derogations: child.derogations || [], school_tracking: child.schoolTracking ?? false,
     });
     if (error) { console.error("addChild error:", error); return; }
     await refreshActive();
   }
 
-  async function addChildren(children: { firstName: string; lastName: string; dob: string; vacationPeriods: VacationPeriod[]; role: ChildRole | null }[]) {
+  async function addChildren(children: { firstName: string; lastName: string; dob: string; vacationPeriods: VacationPeriod[]; role: ChildRole | null; schoolTracking?: boolean }[]) {
     if (children.length === 0) return;
-    const rows = children.map(c => ({ project_id: activeProject!.id, first_name: c.firstName, last_name: c.lastName, dob: c.dob, vacation_periods: c.vacationPeriods || [], child_role: c.role ?? null }));
+    const rows = children.map(c => ({ project_id: activeProject!.id, first_name: c.firstName, last_name: c.lastName, dob: c.dob, vacation_periods: c.vacationPeriods || [], child_role: c.role ?? null, school_tracking: c.schoolTracking ?? false }));
     const { error } = await supabase.from("children").insert(rows);
     if (error) { console.error("Import error:", error); throw error; }
     await refreshActive();
   }
 
-  async function updateChild(id: string, data: { fullName: string; dob: string; vacationPeriods: VacationPeriod[]; role: ChildRole | null; derogations?: Derogation[] }) {
+  async function updateChild(id: string, data: { fullName: string; dob: string; vacationPeriods: VacationPeriod[]; role: ChildRole | null; derogations?: Derogation[]; schoolTracking?: boolean }) {
     const { firstName, lastName } = splitFullName(data.fullName);
-    const { error } = await supabase.from("children").update({ first_name: firstName, last_name: lastName, dob: data.dob, vacation_periods: data.vacationPeriods || [], child_role: data.role ?? null, derogations: data.derogations || [] }).eq("id", id);
+    const { error } = await supabase.from("children").update({ first_name: firstName, last_name: lastName, dob: data.dob, vacation_periods: data.vacationPeriods || [], child_role: data.role ?? null, derogations: data.derogations || [], school_tracking: data.schoolTracking ?? false }).eq("id", id);
     if (error) { console.error("updateChild error:", error); return; }
     await refreshActive();
   }
@@ -922,19 +942,33 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
   }
   async function startSession(dateStr: string, childId: string, timeISO?: string) { await startSessionsSequentially(dateStr, [childId], timeISO); }
   async function cancelSession(dateStr: string, childId: string) { const day = activeProject!.shootingDays[dateStr]; if (!day) return; const sessions = { ...(day.sessions || {}) }; delete sessions[childId]; await updateDaySessions(dateStr, sessions); }
-  async function applyEventToChildren(dateStr: string, childIds: string[], eventType: "pause_start" | "pause_end" | "dejeuner_start" | "dejeuner_end", timeISO?: string) {
+  async function applyEventToChildren(dateStr: string, childIds: string[], eventType: "pause_start" | "pause_end" | "dejeuner_start" | "dejeuner_end" | "school_start" | "school_end", timeISO?: string) {
     const day = activeProject!.shootingDays[dateStr]; if (!day) return;
     const sessions = { ...(day.sessions || {}) };
     for (const childId of childIds) {
       const s = sessions[childId]; if (!s?.start_time || s.status === "done") continue;
       if (eventType === "pause_start" && s.status !== "working") continue;
       if (eventType === "dejeuner_start" && s.status !== "working") continue;
-      // "pause_end" sert aussi à reprendre depuis un déjeuner (smart resume)
-      if (eventType === "pause_end" && s.status !== "paused" && s.status !== "dejeuner") continue;
+      if (eventType === "school_start" && s.status !== "working") continue;
+      // Pour school_start, on filtre aussi sur le flag de l'enfant
+      if (eventType === "school_start") {
+        const child = activeProject!.children.find(c => c.id === childId);
+        if (!child?.school_tracking) continue;
+      }
+      // "pause_end" sert aussi à reprendre depuis un déjeuner ou un suivi scolaire (smart resume)
+      if (eventType === "pause_end" && s.status !== "paused" && s.status !== "dejeuner" && s.status !== "school") continue;
       if (eventType === "dejeuner_end" && s.status !== "dejeuner") continue;
-      // Si pause_end mais enfant en déjeuner → enregistrer dejeuner_end
-      const actualType: SessionEvent["type"] = (eventType === "pause_end" && s.status === "dejeuner") ? "dejeuner_end" : eventType;
-      const newStatus: Session["status"] = actualType === "pause_start" ? "paused" : actualType === "dejeuner_start" ? "dejeuner" : "working";
+      if (eventType === "school_end" && s.status !== "school") continue;
+      // Si pause_end mais enfant en déjeuner ou suivi scolaire → enregistrer le bon end
+      const actualType: SessionEvent["type"] =
+        (eventType === "pause_end" && s.status === "dejeuner") ? "dejeuner_end"
+        : (eventType === "pause_end" && s.status === "school") ? "school_end"
+        : eventType;
+      const newStatus: Session["status"] =
+        actualType === "pause_start" ? "paused"
+        : actualType === "dejeuner_start" ? "dejeuner"
+        : actualType === "school_start" ? "school"
+        : "working";
       sessions[childId] = { ...s, status: newStatus, events: [...(s.events || []), { type: actualType, time: timeISO || nowISO() }] };
     }
     await updateDaySessions(dateStr, sessions);
@@ -946,6 +980,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     let status: Session["status"] = "working";
     if (lastEv?.type === "pause_start") status = "paused";
     else if (lastEv?.type === "dejeuner_start") status = "dejeuner";
+    else if (lastEv?.type === "school_start") status = "school";
     sessions[childId] = { ...s, events, status, end_time: undefined }; await updateDaySessions(dateStr, sessions);
   }
   async function endSessions(dateStr: string, childIds: string[], timeISO?: string) {
@@ -956,6 +991,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
       const events = [...(s.events || [])];
       if (s.status === "paused") events.push({ type: "pause_end", time: timeISO || nowISO() });
       else if (s.status === "dejeuner") events.push({ type: "dejeuner_end", time: timeISO || nowISO() });
+      else if (s.status === "school") events.push({ type: "school_end", time: timeISO || nowISO() });
       sessions[childId] = { ...s, end_time: timeISO || nowISO(), status: "done", events };
     }
     await updateDaySessions(dateStr, sessions);
@@ -1282,7 +1318,7 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
   const displayChildren = sortByRoleThenAlpha(showArchived ? archivedChildren : (roleTab === "all" ? activeChildren : activeChildren.filter(c => c.role === roleTab)));
 
   function downloadTemplate() {
-    const csv = "Nom Prénom;Statut (role/silhouette/figurant);Date de naissance (JJ/MM/AAAA);Début vacances (JJ/MM/AAAA);Fin vacances (JJ/MM/AAAA)\nMartin Léa;role;15/03/2015;01/07/2025;31/08/2025\n";
+    const csv = "Nom Prénom;Statut (role/silhouette/figurant);Date de naissance (JJ/MM/AAAA);Début vacances (JJ/MM/AAAA);Fin vacances (JJ/MM/AAAA);Suivi scolaire (oui/non)\nMartin Léa;role;15/03/2015;01/07/2025;31/08/2025;oui\n";
     const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "modele_enfants_kidstime.csv"; a.click(); URL.revokeObjectURL(url);
   }
@@ -1312,6 +1348,7 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
       const vs = guessColumn(headers, ["debut vacances", "début vacances", "vacances debut", "debut vac"]);
       const ve = guessColumn(headers, ["fin vacances", "vacances fin", "end vacances", "fin vac"]);
       const statCol = guessColumn(headers, ["statut", "status", "type de role", "type"]);
+      const scolCol = guessColumn(headers, ["suivi scolaire", "scolaire", "school tracking", "school", "suivi"]);
       const parsed = rows.map(r => {
         let fullName = "";
         if (fullCol && String(r[fullCol] || "").trim()) fullName = String(r[fullCol]).trim();
@@ -1322,7 +1359,8 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
         else { const firstVal = Object.values(r).find(v => String(v || "").trim() !== ""); fullName = String(firstVal || "").trim(); }
         const { firstName, lastName } = splitFullName(fullName);
         const role: ChildRole | null = statCol ? detectRole(String(r[statCol] || "")) : null;
-        return { firstName, lastName, dob: dobCol ? parseExcelDate(r[dobCol]) : "", vacationPeriods: (vs && ve && r[vs] && r[ve]) ? [{ start: parseExcelDate(r[vs]), end: parseExcelDate(r[ve]) }] : [], role };
+        const schoolTracking = scolCol ? /^(oui|yes|true|1|x|o)$/i.test(String(r[scolCol] ?? "").trim()) : false;
+        return { firstName, lastName, dob: dobCol ? parseExcelDate(r[dobCol]) : "", vacationPeriods: (vs && ve && r[vs] && r[ve]) ? [{ start: parseExcelDate(r[vs]), end: parseExcelDate(r[ve]) }] : [], role, schoolTracking };
       }).filter(c => c.firstName && c.dob);
       if (parsed.length === 0) { setImportMsg("❌ Aucun enfant valide trouvé."); return; }
       setImportPreview(parsed); setShowPreview(true);
@@ -1583,12 +1621,13 @@ function ChildFormModal({ child, onSave, onClose }: { child: Child | null; onSav
   const [newVac, setNewVac] = useState({ start: "", end: "" });
   const [derogations, setDerogations] = useState<Derogation[]>(child?.derogations || []);
   const [newDerog, setNewDerog] = useState({ date: "", end_time: "" });
+  const [schoolTracking, setSchoolTracking] = useState<boolean>(child?.school_tracking ?? false);
   const [error, setError] = useState("");
 
   function handleSave() {
     if (!fullName.trim()) { setError("Le prénom et nom sont obligatoires."); return; }
     if (!dob) { setError("La date de naissance est obligatoire."); return; }
-    setError(""); onSave({ fullName: fullName.trim(), dob, vacationPeriods, role, derogations });
+    setError(""); onSave({ fullName: fullName.trim(), dob, vacationPeriods, role, derogations, schoolTracking });
   }
 
   return (
@@ -1612,6 +1651,14 @@ function ChildFormModal({ child, onSave, onClose }: { child: Child | null; onSav
             <TextInput label="Fin" type="date" value={newVac.end} onChange={e => setNewVac(v => ({ ...v, end: e.target.value }))} />
             <button onClick={() => { if (newVac.start && newVac.end) { setVacationPeriods(v => [...v, newVac]); setNewVac({ start: "", end: "" }); } }} className="bg-slate-700 text-white px-3 rounded-lg h-12 text-sm">+</button>
           </div>
+        </div>
+        {/* Suivi scolaire */}
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] text-slate-400 uppercase tracking-[0.15em] font-semibold">Suivi scolaire <span className="text-slate-600 font-normal normal-case">(optionnel)</span></label>
+          <button type="button" onClick={() => setSchoolTracking(v => !v)} className={`px-3 py-2 rounded-lg text-xs font-semibold border w-fit ${schoolTracking ? "bg-indigo-700 border-indigo-500 text-white" : "bg-slate-800 border-slate-600 text-slate-400"}`}>
+            {schoolTracking ? "✓ Activé" : "Désactivé"}
+          </button>
+          <div className="text-[10px] text-slate-500">Active le bouton 📚 Suivi scolaire pour cet enfant pendant le tournage. Inclus dans l&apos;amplitude, hors temps de travail et hors pause.</div>
         </div>
         {/* Dérogations horaires (travail après 20h) */}
         <div>
@@ -1657,7 +1704,7 @@ function GroupFormModal({ group, onSave, onClose }: { group: Group | null; onSav
 function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSession, onCancelSession, onApplyEvent, onCancelLastEvent, onEndSessions, onReopenSession, onToggleChild, onAddGroup, onRemoveGroup, onEditEventTime, onEditStartTime, onEditEndTime, onExportPDF }: {
   project: Project; dateStr: string; onBack: () => void;
   onStartSessions: (cids: string[], t?: string) => void; onStartSession: (cid: string, t?: string) => void;
-  onCancelSession: (cid: string) => void; onApplyEvent: (cids: string[], type: "pause_start" | "pause_end" | "dejeuner_start" | "dejeuner_end", t?: string) => void;
+  onCancelSession: (cid: string) => void; onApplyEvent: (cids: string[], type: "pause_start" | "pause_end" | "dejeuner_start" | "dejeuner_end" | "school_start" | "school_end", t?: string) => void;
   onCancelLastEvent: (cid: string) => void; onEndSessions: (cids: string[], t?: string) => void;
   onReopenSession: (cid: string) => void; onToggleChild: (cid: string) => void;
   onAddGroup: (gid: string) => void; onRemoveGroup: (gid: string) => void;
@@ -1667,7 +1714,7 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
   const [, setTick] = useState(0);
   const [addingChildren, setAdding] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [actionModal, setActionModal] = useState<{ type: "start" | "pause" | "dejeuner" | "resume" | "end" } | null>(null);
+  const [actionModal, setActionModal] = useState<{ type: "start" | "pause" | "dejeuner" | "school" | "resume" | "end" } | null>(null);
   const [search, setSearch] = useState("");
   const [roleTab, setRoleTab] = useState<ChildRole | "all">("all");
   const [expandedId, setExpandedId] = useState<string | null>(null); // Fix #1: collapsed cards
@@ -1692,10 +1739,12 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
 
   function toggleSelect(id: string) { setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }); }
   const selList = [...selected];
+  const childHasSchool = (id: string) => project.children.find(c => c.id === id)?.school_tracking === true;
   const canStart    = selList.some(id => !sessions[id]?.start_time);
   const canPause    = selList.some(id => sessions[id]?.status === "working");
   const canDejeuner = selList.some(id => sessions[id]?.status === "working");
-  const canResume   = selList.some(id => sessions[id]?.status === "paused" || sessions[id]?.status === "dejeuner");
+  const canSchool   = selList.some(id => sessions[id]?.status === "working" && childHasSchool(id));
+  const canResume   = selList.some(id => sessions[id]?.status === "paused" || sessions[id]?.status === "dejeuner" || sessions[id]?.status === "school");
   const canEnd      = selList.some(id => sessions[id]?.start_time && sessions[id]?.status !== "done");
 
   return (
@@ -1727,6 +1776,7 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
                 {canStart    && <button onClick={() => setActionModal({ type: "start" })}    className="text-[10px] bg-emerald-900/60 text-emerald-300 border border-emerald-800 px-2 py-1.5 rounded-lg whitespace-nowrap">▶ Start</button>}
                 {canPause    && <button onClick={() => setActionModal({ type: "pause" })}    className="text-[10px] bg-amber-900/60 text-amber-300 border border-amber-800 px-2 py-1.5 rounded-lg whitespace-nowrap">⏸ Pause</button>}
                 {canDejeuner && <button onClick={() => setActionModal({ type: "dejeuner" })} className="text-[10px] bg-orange-900/60 text-orange-300 border border-orange-700 px-2 py-1.5 rounded-lg whitespace-nowrap">🍽 Déjeuner</button>}
+                {canSchool   && <button onClick={() => setActionModal({ type: "school" })}   className="text-[10px] bg-indigo-900/60 text-indigo-300 border border-indigo-700 px-2 py-1.5 rounded-lg whitespace-nowrap">📚 Suivi scolaire</button>}
                 {canResume   && <button onClick={() => setActionModal({ type: "resume" })}   className="text-[10px] bg-emerald-900/60 text-emerald-300 border border-emerald-800 px-2 py-1.5 rounded-lg whitespace-nowrap">▶ Reprise</button>}
                 {canEnd      && <button onClick={() => setActionModal({ type: "end" })}      className="text-[10px] bg-slate-700 text-white border border-slate-600 px-2 py-1.5 rounded-lg whitespace-nowrap">⏹ Fin</button>}
               </div>
@@ -1843,6 +1893,7 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
           if      (actionModal.type === "start")    onStartSessions(ids, timeISO);
           else if (actionModal.type === "pause")    onApplyEvent(ids, "pause_start", timeISO);
           else if (actionModal.type === "dejeuner") onApplyEvent(ids, "dejeuner_start", timeISO);
+          else if (actionModal.type === "school")   onApplyEvent(ids, "school_start", timeISO);
           else if (actionModal.type === "resume")   onApplyEvent(ids, "pause_end", timeISO);
           else if (actionModal.type === "end")      onEndSessions(ids, timeISO);
           setActionModal(null);
@@ -1855,7 +1906,7 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
 function TimeActionModal({ type, childCount, dateStr, onConfirm, onClose }: { type: string; childCount: number; dateStr: string; onConfirm: (t: string) => void; onClose: () => void }) {
   const now = new Date();
   const [timeStr, setTimeStr] = useState(`${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`);
-  const labels: Record<string, string> = { start: "Démarrer", pause: "Mise en pause", dejeuner: "Pause déjeuner", resume: "Reprise", end: "Fin de journée" };
+  const labels: Record<string, string> = { start: "Démarrer", pause: "Mise en pause", dejeuner: "Pause déjeuner", school: "Suivi scolaire", resume: "Reprise", end: "Fin de journée" };
   return (
     <Modal title={`${labels[type]} — ${childCount} enfant(s)`} onClose={onClose}>
       <div className="space-y-4">
@@ -1895,12 +1946,12 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
   isExpanded: boolean; onToggleExpand: () => void;
   onStart: (t?: string) => void; onCancelSession: () => void; onCancelLastEvent: () => void; onReopenSession: () => void;
   onEditEventTime: (idx: number, t: string) => void; onEditStartTime: (t: string) => void; onEditEndTime: (t: string) => void;
-  onApplyEvent: (type: "pause_start" | "pause_end" | "dejeuner_start" | "dejeuner_end", t?: string) => void;
+  onApplyEvent: (type: "pause_start" | "pause_end" | "dejeuner_start" | "dejeuner_end" | "school_start" | "school_end", t?: string) => void;
   onEndSession: (t?: string) => void;
   dateStr: string;
 }) {
   const [editingIdx, setEditingIdx] = useState<number | "start" | "end" | null>(null);
-  const [indivModal, setIndivModal] = useState<{ type: "pause" | "dejeuner" | "resume" | "end" } | null>(null);
+  const [indivModal, setIndivModal] = useState<{ type: "pause" | "dejeuner" | "school" | "resume" | "end" } | null>(null);
   const [editTime, setEditTime] = useState("");
   const workPct  = stats ? Math.min(100, (stats.workMin / maxWork) * 100) : 0;
   const ampPct   = stats ? Math.min(100, (stats.amplitudeMin / maxAmplitude) * 100) : 0;
@@ -1923,7 +1974,7 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
   }
   const events = session?.events || [];
 
-  const statusColor = session?.status === "working" ? "border-emerald-700" : session?.status === "paused" ? "border-amber-600" : session?.status === "dejeuner" ? "border-orange-500" : session?.status === "done" ? "border-slate-600" : workCrit || ampCrit ? "border-red-700" : ampWarn ? "border-orange-500" : pastTimeLimit ? "border-orange-600" : breakDue ? "border-amber-600" : "border-slate-700";
+  const statusColor = session?.status === "working" ? "border-emerald-700" : session?.status === "paused" ? "border-amber-600" : session?.status === "dejeuner" ? "border-orange-500" : session?.status === "school" ? "border-indigo-600" : session?.status === "done" ? "border-slate-600" : workCrit || ampCrit ? "border-red-700" : ampWarn ? "border-orange-500" : pastTimeLimit ? "border-orange-600" : breakDue ? "border-amber-600" : "border-slate-700";
 
   return (
     <div className={`rounded-xl border transition-all ${isSelected ? "border-blue-500 bg-blue-950/20" : statusColor + " bg-slate-900/50"}`}>
@@ -1940,6 +1991,7 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
             {session?.status === "working" && stats && <span className="text-[10px] text-emerald-400">▶ {formatMinutes(stats.workMin)}</span>}
             {session?.status === "paused" && stats && <span className="text-[10px] text-amber-400">⏸ {formatMinutes(stats.workMin)}</span>}
             {session?.status === "dejeuner" && stats && <span className="text-[10px] text-orange-400">🍽 {formatMinutes(stats.dejeunerMin)}</span>}
+            {session?.status === "school" && stats && <span className="text-[10px] text-indigo-400">📚 {formatMinutes(stats.schoolMin)}</span>}
             {session?.status === "done" && <span className="text-[10px] text-slate-400">✓ Terminé</span>}
             {!session?.start_time && <span className="text-[10px] text-slate-500">Non démarré</span>}
             {workCrit && <span className="text-[10px] text-red-400">🚫 Trav.</span>}
@@ -1968,7 +2020,7 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
           {stats && (
             <>
               <div className="grid grid-cols-3 gap-2">
-                {([{ l: "Travail", v: stats.workMin, max: maxWork, crit: workCrit }, { l: "🍽 Déjeuner", v: stats.dejeunerMin }, { l: "Pauses val.", v: stats.validBreakMin, sub: `tot.${formatMinutes(stats.breakMin)}` }, { l: "Amplitude", v: stats.amplitudeMin, max: maxAmplitude, crit: ampCrit, warn: ampWarn }] as any[]).map(({ l, v, max, sub, crit, warn }) => (
+                {([{ l: "Travail", v: stats.workMin, max: maxWork, crit: workCrit }, { l: "🍽 Déjeuner", v: stats.dejeunerMin }, { l: "Pauses val.", v: stats.validBreakMin, sub: `tot.${formatMinutes(stats.breakMin)}` }, ...(child.school_tracking || stats.schoolMin > 0 ? [{ l: "📚 Suivi sco.", v: stats.schoolMin }] : []), { l: "Amplitude", v: stats.amplitudeMin, max: maxAmplitude, crit: ampCrit, warn: ampWarn }] as any[]).map(({ l, v, max, sub, crit, warn }) => (
                   <div key={l} className={`rounded-lg p-2 text-center border ${crit ? "bg-red-900/30 border-red-800" : warn ? "bg-orange-900/30 border-orange-700" : "bg-slate-800/50 border-slate-700"}`}>
                     <div className={`text-base font-bold ${crit ? "text-red-400" : warn ? "text-orange-400" : "text-white"}`}>{formatMinutes(v)}</div>
                     <div className="text-[9px] text-slate-400">{l}</div>
@@ -1989,7 +2041,8 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
                 <div className="flex gap-2 flex-wrap">
                   {session?.status === "working" && <button onClick={() => setIndivModal({ type: "pause" })} className="flex-1 text-xs bg-amber-900/60 text-amber-300 border border-amber-800 px-3 py-2 rounded-lg whitespace-nowrap">⏸ Pause</button>}
                   {session?.status === "working" && <button onClick={() => setIndivModal({ type: "dejeuner" })} className="flex-1 text-xs bg-orange-900/60 text-orange-300 border border-orange-700 px-3 py-2 rounded-lg whitespace-nowrap">🍽 Déjeuner</button>}
-                  {(session?.status === "paused" || session?.status === "dejeuner") && <button onClick={() => setIndivModal({ type: "resume" })} className="flex-1 text-xs bg-emerald-900/60 text-emerald-300 border border-emerald-800 px-3 py-2 rounded-lg whitespace-nowrap">▶ Reprise</button>}
+                  {session?.status === "working" && child.school_tracking && <button onClick={() => setIndivModal({ type: "school" })} className="flex-1 text-xs bg-indigo-900/60 text-indigo-300 border border-indigo-700 px-3 py-2 rounded-lg whitespace-nowrap">📚 Suivi sco.</button>}
+                  {(session?.status === "paused" || session?.status === "dejeuner" || session?.status === "school") && <button onClick={() => setIndivModal({ type: "resume" })} className="flex-1 text-xs bg-emerald-900/60 text-emerald-300 border border-emerald-800 px-3 py-2 rounded-lg whitespace-nowrap">▶ Reprise</button>}
                   {session?.start_time && <button onClick={() => setIndivModal({ type: "end" })} className="flex-1 text-xs bg-slate-700/60 text-slate-300 border border-slate-600 px-3 py-2 rounded-lg whitespace-nowrap">⏹ Fin</button>}
                 </div>
               )}
@@ -1999,7 +2052,7 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
                 <div className="space-y-2">
                   <TimelineRow label="▶ Début" iso={session?.start_time} isEditing={editingIdx === "start"} editTime={editTime} onEdit={() => startEdit("start", session?.start_time)} onTimeChange={setEditTime} onConfirm={confirmEdit} onCancel={() => setEditingIdx(null)} />
                   {events.map((ev, i) => <TimelineRow key={i}
-                    label={ev.type === "pause_start" ? "⏸ Pause" : ev.type === "pause_end" ? "▶ Reprise" : ev.type === "dejeuner_start" ? "🍽 Déjeuner" : "▶ Reprise déj."}
+                    label={ev.type === "pause_start" ? "⏸ Pause" : ev.type === "pause_end" ? "▶ Reprise" : ev.type === "dejeuner_start" ? "🍽 Déjeuner" : ev.type === "dejeuner_end" ? "▶ Reprise déj." : ev.type === "school_start" ? "📚 Suivi scolaire" : "▶ Reprise (sco.)"}
                     iso={ev.time} isEditing={editingIdx === i} editTime={editTime} onEdit={() => startEdit(i, ev.time)} onTimeChange={setEditTime} onConfirm={confirmEdit} onCancel={() => setEditingIdx(null)} />)}
                   {session?.end_time && <TimelineRow label="⏹ Fin" iso={session.end_time} isEditing={editingIdx === "end"} editTime={editTime} onEdit={() => startEdit("end", session.end_time)} onTimeChange={setEditTime} onConfirm={confirmEdit} onCancel={() => setEditingIdx(null)} />}
                 </div>
@@ -2019,6 +2072,7 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
         onConfirm={timeISO => {
           if      (indivModal.type === "pause")    onApplyEvent("pause_start", timeISO);
           else if (indivModal.type === "dejeuner") onApplyEvent("dejeuner_start", timeISO);
+          else if (indivModal.type === "school")   onApplyEvent("school_start", timeISO);
           else if (indivModal.type === "resume")   onApplyEvent("pause_end", timeISO);
           else if (indivModal.type === "end")      onEndSession(timeISO);
           setIndivModal(null);

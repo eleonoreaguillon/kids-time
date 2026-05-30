@@ -43,6 +43,7 @@ function ChildDetailRow({ row, dateStr }: { row: any; dateStr: string }) {
   const ampOver = stats ? Math.max(0, stats.amplitudeMin - maxAmp) : 0;
   const pauseSlots = stats?.breakSlots.filter((b: any) => b.kind === "pause") || [];
   const dejeunerSlots = stats?.breakSlots.filter((b: any) => b.kind === "dejeuner") || [];
+  const schoolSlots = stats?.breakSlots.filter((b: any) => b.kind === "school") || [];
 
   return (
     <div className="bg-slate-800/60 border border-slate-700 rounded-xl p-3">
@@ -62,6 +63,7 @@ function ChildDetailRow({ row, dateStr }: { row: any; dateStr: string }) {
             <div className="text-slate-400">Amplitude <span className={`font-mono ${ampOver > 0 ? "text-red-400 font-bold" : stats.amplitudeMin === maxAmp ? "text-orange-400" : "text-orange-300"}`}>{formatMinutes(stats.amplitudeMin)}</span> <span className="text-slate-600">/ {formatMinutes(maxAmp)}</span></div>
             <div className="text-slate-400">🍽 Déjeuner <span className="text-yellow-300 font-mono">{formatMinutes(stats.dejeunerMin)}</span></div>
             <div className="text-slate-400">Pauses valides <span className="text-green-300 font-mono">{formatMinutes(stats.validBreakMin)}</span></div>
+            {(child.school_tracking || stats.schoolMin > 0) && <div className="text-slate-400">📚 Suivi scolaire <span className="text-indigo-300 font-mono">{formatMinutes(stats.schoolMin)}</span></div>}
           </div>
           {(workOver > 0 || ampOver > 0) && (
             <div className="flex gap-2 flex-wrap pt-1">
@@ -74,6 +76,9 @@ function ChildDetailRow({ row, dateStr }: { row: any; dateStr: string }) {
           )}
           {pauseSlots.length > 0 && (
             <div className="text-[10px] text-slate-500">Plages pauses : {pauseSlots.map((b: any) => `${formatTime(b.start)}-${formatTime(b.end)} (${formatMinutes(b.durationMin)}${b.valid ? "" : " ✗"})`).join(", ")}</div>
+          )}
+          {schoolSlots.length > 0 && (
+            <div className="text-[10px] text-slate-500">Plages suivi scolaire : {schoolSlots.map((b: any) => `${formatTime(b.start)}-${formatTime(b.end)} (${formatMinutes(b.durationMin)})`).join(", ")}</div>
           )}
         </div>
       )}
