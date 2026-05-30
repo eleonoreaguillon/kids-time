@@ -1605,6 +1605,99 @@ function CalendarTab({ project, onOpenDay }: { project: Project; onOpenDay: (d: 
 }
 
 // Fix #1 + #3 + #4: ChildrenTab with archive + per-child export
+function ChildDeleteConfirmModal({ child, onConfirm, onClose }: { child: Child; onConfirm: () => void; onClose: () => void }) {
+  type Step = "step1" | "step2";
+  const [step, setStep] = useState<Step>("step1");
+  const [understood, setUnderstood] = useState(false);
+  const [confirmName, setConfirmName] = useState("");
+  const fullName = `${child.first_name} ${child.last_name}`.trim();
+  const canContinue = understood;
+  const canDelete = confirmName.trim().toLowerCase() === fullName.toLowerCase();
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm px-4 pb-4" onClick={onClose}>
+      <div className="bg-[#0f1a2e] border border-red-900/60 rounded-2xl w-full max-w-md p-5 space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h2 className="font-bold text-red-400" style={{ fontFamily: "Syne, sans-serif" }}>⚠️ Supprimer un enfant</h2>
+          <button onClick={onClose} className="text-slate-400 hover:text-white w-8 h-8 flex items-center justify-center">✕</button>
+        </div>
+
+        <div className="flex items-center gap-1.5 text-[10px] text-slate-500">
+          <span className={step === "step1" ? "text-red-400 font-bold" : ""}>1. Avertissement</span>
+          <span>›</span>
+          <span className={step === "step2" ? "text-red-400 font-bold" : ""}>2. Confirmer le nom</span>
+        </div>
+
+        {step === "step1" && (
+          <>
+            <div className="bg-red-950/30 border border-red-800/60 rounded-xl p-3 text-xs space-y-2">
+              <div className="text-red-300 font-bold">Action irréversible</div>
+              <div className="text-slate-300">
+                Tu vas supprimer définitivement la fiche de <b className="text-white">{fullName}</b> et toutes les
+                données associées (sessions de tournage de cet enfant, présences dans les groupes).
+              </div>
+              <div className="text-slate-400">
+                Pense à <b>archiver</b> plutôt que supprimer si tu souhaites garder l&apos;historique consultable.
+              </div>
+            </div>
+            <label className="flex items-start gap-2 text-xs text-slate-300 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={understood}
+                onChange={e => setUnderstood(e.target.checked)}
+                className="mt-0.5 w-4 h-4 accent-red-500"
+              />
+              <span>Je comprends que la suppression est irréversible.</span>
+            </label>
+            <div className="flex gap-2">
+              <button onClick={onClose} className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl text-sm font-semibold transition-colors">
+                Annuler
+              </button>
+              <button
+                onClick={() => canContinue && setStep("step2")}
+                disabled={!canContinue}
+                className={`flex-1 py-3 rounded-xl text-sm font-bold transition-colors ${canContinue ? "bg-red-700 hover:bg-red-600 text-white" : "bg-slate-800 text-slate-600 cursor-not-allowed"}`}
+              >
+                Continuer
+              </button>
+            </div>
+          </>
+        )}
+
+        {step === "step2" && (
+          <>
+            <p className="text-sm text-slate-300">
+              Pour confirmer, tape le nom complet de l&apos;enfant ci-dessous :
+            </p>
+            <div className="bg-slate-900/70 border border-slate-700 rounded-lg px-3 py-2 font-mono text-white text-xs">
+              {fullName}
+            </div>
+            <input
+              autoFocus
+              value={confirmName}
+              onChange={e => setConfirmName(e.target.value)}
+              placeholder="Prénom Nom"
+              className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:border-red-500 placeholder:text-slate-600"
+            />
+            <div className="flex gap-2">
+              <button onClick={() => setStep("step1")} className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl text-sm font-semibold transition-colors">
+                ← Retour
+              </button>
+              <button
+                onClick={() => { if (canDelete) { onConfirm(); onClose(); } }}
+                disabled={!canDelete}
+                className={`flex-1 py-3 rounded-xl text-sm font-bold transition-colors ${canDelete ? "bg-red-700 hover:bg-red-600 text-white" : "bg-slate-800 text-slate-600 cursor-not-allowed"}`}
+              >
+                Supprimer définitivement
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, onExportChildDays }: {
   project: Project; onAdd: () => void; onEdit: (c: Child) => void; onRemove: (id: string) => void;
   onImport: (cs: any[]) => Promise<void>; onArchive: (id: string, archived: boolean) => void;
@@ -1617,6 +1710,7 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
   const [importing, setImporting] = useState(false);
   const [roleTab, setRoleTab] = useState<ChildRole | "all">("all");
   const [showArchived, setShowArchived] = useState(false);
+  const [deletingChild, setDeletingChild] = useState<Child | null>(null);
 
   const activeChildren = project.children.filter(c => !c.archived);
   const archivedChildren = project.children.filter(c => c.archived);
@@ -1750,11 +1844,18 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
                 ? <button onClick={() => onArchive(c.id, true)} className="text-[10px] text-amber-400 border border-amber-800/60 px-2 py-1 rounded-lg">📦 Archiver</button>
                 : <button onClick={() => onArchive(c.id, false)} className="text-[10px] text-emerald-400 border border-emerald-800/60 px-2 py-1 rounded-lg">↩ Désarchiver</button>
               }
-              <button onClick={() => onRemove(c.id)} className="text-[10px] text-red-400 border border-red-800/60 px-2 py-1 rounded-lg ml-auto">🗑</button>
+              <button onClick={() => setDeletingChild(c)} className="text-[10px] text-red-400 border border-red-800/60 px-2 py-1 rounded-lg ml-auto">🗑</button>
             </div>
           </div>
         ))}</div>
       }
+      {deletingChild && (
+        <ChildDeleteConfirmModal
+          child={deletingChild}
+          onConfirm={() => onRemove(deletingChild.id)}
+          onClose={() => setDeletingChild(null)}
+        />
+      )}
     </div>
   );
 }
