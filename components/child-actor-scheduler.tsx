@@ -883,6 +883,14 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     setActiveProject(p => p ? { ...p, rules: r } : p);
   }
 
+  async function renameProject(name: string) {
+    const clean = name.trim();
+    if (!clean || !activeProject) return;
+    await supabase.from("projects").update({ name: clean }).eq("id", activeProject.id);
+    setActiveProject(p => p ? { ...p, name: clean } : p);
+    await loadProjects();
+  }
+
   async function getOrCreateDay(dateStr: string): Promise<ShootingDay> {
     let day = activeProject!.shootingDays[dateStr];
     if (!day) { const { data } = await supabase.from("shooting_days").insert({ project_id: activeProject!.id, date: dateStr, child_ids: [], sessions: {} }).select().single(); day = data as ShootingDay; }
@@ -969,6 +977,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     onOpenDay={date => { setActiveDate(date); setView("shooting"); }}
     onExportProjectPDF={() => exportProjectGlobalPDF(activeProject)}
     onExportChildDays={child => exportChildAllDays(activeProject, child)}
+    onRename={renameProject}
     onDelete={() => { deleteProject(activeProject.id); setView("home"); loadProjects(); }}
     onGenerateShareToken={() => generateShareToken(activeProject.id)}
     onSetSharePassword={(pwd) => setSharePassword(activeProject.id, pwd)}
@@ -1147,7 +1156,7 @@ function HomeView({ projects, userEmail, onCreate, onOpen, onSignOut }: { projec
   );
 }
 
-function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild, onRemoveChild, onArchiveChild, onAddGroup, onUpdateGroup, onRemoveGroup, onUpdateRules, onOpenDay, onExportProjectPDF, onExportChildDays, onDelete, onGenerateShareToken, onSetSharePassword, onRevokeShareToken }: {
+function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild, onRemoveChild, onArchiveChild, onAddGroup, onUpdateGroup, onRemoveGroup, onUpdateRules, onOpenDay, onExportProjectPDF, onExportChildDays, onRename, onDelete, onGenerateShareToken, onSetSharePassword, onRevokeShareToken }: {
   project: Project; onBack: () => void;
   onAddChild: (c: any) => void; onAddChildren: (cs: any[]) => Promise<void>;
   onUpdateChild: (id: string, d: any) => void; onRemoveChild: (id: string) => void;
@@ -1156,6 +1165,7 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
   onUpdateRules: (fn: (r: Rules) => Rules) => void; onOpenDay: (date: string) => void;
   onExportProjectPDF: () => void;
   onExportChildDays: (child: Child) => void;
+  onRename: (name: string) => Promise<void>;
   onDelete: () => void;
   onGenerateShareToken: () => Promise<string>;
   onSetSharePassword: (pwd: string | null) => Promise<void>;
@@ -1190,7 +1200,7 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
         {tab === "calendar" && <CalendarTab project={project} onOpenDay={onOpenDay} />}
         {tab === "children" && <ChildrenTab project={project} onAdd={() => setChildModal("new")} onEdit={c => setChildModal(c)} onRemove={onRemoveChild} onImport={onAddChildren} onArchive={onArchiveChild} onExportChildDays={onExportChildDays} />}
         {tab === "groups" && <GroupsTab project={project} onAdd={() => setGroupModal("new")} onRemove={onRemoveGroup} onUpdateGroup={onUpdateGroup} />}
-        {tab === "settings" && <SettingsTab rules={project.rules} onUpdateRules={onUpdateRules} projectName={project.name} onDelete={onDelete} />}
+        {tab === "settings" && <SettingsTab rules={project.rules} onUpdateRules={onUpdateRules} projectName={project.name} onRename={onRename} onDelete={onDelete} />}
       </div>
 
       {/* Fix #1: bottom tab bar for mobile */}
@@ -1469,14 +1479,49 @@ function GroupsTab({ project, onAdd, onRemove, onUpdateGroup }: { project: Proje
   );
 }
 
-function SettingsTab({ rules, onUpdateRules, projectName, onDelete }: { rules: Rules; onUpdateRules: (fn: (r: Rules) => Rules) => void; projectName: string; onDelete: () => void }) {
+function SettingsTab({ rules, onUpdateRules, projectName, onRename, onDelete }: { rules: Rules; onUpdateRules: (fn: (r: Rules) => Rules) => void; projectName: string; onRename: (name: string) => Promise<void>; onDelete: () => void }) {
   const [confirmName, setConfirmName] = useState("");
+  const [nameDraft, setNameDraft] = useState(projectName);
+  const [renameMsg, setRenameMsg] = useState<"" | "saving" | "saved" | "error">("");
+  useEffect(() => { setNameDraft(projectName); }, [projectName]);
   function setRule(path: string, value: string) {
     onUpdateRules(r => { const copy = JSON.parse(JSON.stringify(r)); const keys = path.split("."); let obj: any = copy; for (let i = 0; i < keys.length - 1; i++) obj = obj[keys[i]]; obj[keys[keys.length - 1]] = Number(value); return copy; });
   }
+  async function handleRename() {
+    const v = nameDraft.trim();
+    if (!v || v === projectName) return;
+    setRenameMsg("saving");
+    try { await onRename(v); setRenameMsg("saved"); setTimeout(() => setRenameMsg(""), 2000); }
+    catch { setRenameMsg("error"); }
+  }
+  const canRename = nameDraft.trim().length > 0 && nameDraft.trim() !== projectName;
   const BL: Record<AgeBand, string> = { "0-2": "< 3 ans", "3-5": "3–5 ans", "6-11": "6–11 ans", "12-16": "12–16 ans" };
   return (
     <div className="space-y-4">
+      {/* Nom du projet */}
+      <div className="bg-slate-900/50 border border-slate-700 rounded-2xl p-4">
+        <h2 className="font-bold text-sm text-white mb-3" style={{ fontFamily: "Syne, sans-serif" }}>Nom de la production</h2>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={nameDraft}
+            onChange={e => setNameDraft(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") handleRename(); }}
+            className="flex-1 bg-slate-800 border border-slate-600 rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:border-blue-500 placeholder:text-slate-600"
+            placeholder="Nom du projet"
+          />
+          <button
+            onClick={handleRename}
+            disabled={!canRename || renameMsg === "saving"}
+            className={`px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors ${canRename && renameMsg !== "saving" ? "bg-blue-600 hover:bg-blue-500 text-white" : "bg-slate-800 text-slate-600 cursor-not-allowed"}`}
+          >
+            {renameMsg === "saving" ? "…" : "Enregistrer"}
+          </button>
+        </div>
+        {renameMsg === "saved" && <div className="text-xs text-emerald-400 mt-2">✓ Nom mis à jour</div>}
+        {renameMsg === "error" && <div className="text-xs text-red-400 mt-2">Erreur lors de la mise à jour</div>}
+      </div>
+
       <h2 className="font-bold text-base mb-1" style={{ fontFamily: "Syne, sans-serif" }}>Paramètres DRIEETS</h2>
       <div className="space-y-2">
         {([["Amplitude max", "maxAmplitudeMinutes", 60, 720, 30], ["Pause minimum", "minBreakMinutes", 5, 60, 1]] as const).map(([label, key, min, max, step]) => (
