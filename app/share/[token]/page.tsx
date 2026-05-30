@@ -3,11 +3,12 @@
 import { useState, useEffect, use } from "react";
 import { createClient } from "@supabase/supabase-js";
 import {
-  ROLE_LABELS, ROLE_COLORS, ALL_ROLES,
-  getAge, getAgeBand, formatMinutes, formatTime, isVacation,
+  ROLE_LABELS, ROLE_COLORS, ALL_ROLES, AGE_BAND_LABELS,
+  getAge, getAgeBand, isMinor, formatMinutes, formatTime, isVacation,
   computeSessionStats, buildExportRows,
   exportDayToPDF, exportChildAllDays,
   exportProjectGlobalPDF,
+  normalizeRules,
   type Project, type Child, type ShootingDay, type ChildRole,
 } from "@/components/child-actor-scheduler";
 
@@ -32,7 +33,8 @@ function normalizeProject(data: any): Project {
   const shootingDays: Record<string, ShootingDay> = {};
   (data.shooting_days || []).forEach((d: any) => { shootingDays[d.date] = d; });
   const children = (data.children || []).map((c: any) => ({ ...c, role: c.role ?? c.child_role ?? undefined }));
-  return { ...data, children, groups: data.groups || [], shootingDays } as Project;
+  const rules = data.rules ? normalizeRules(data.rules) : data.rules;
+  return { ...data, rules, children, groups: data.groups || [], shootingDays } as Project;
 }
 
 // ─── Per-child detail card (mirrors the host ChildCard info) ──────────────────
@@ -50,7 +52,7 @@ function ChildDetailRow({ row, dateStr }: { row: any; dateStr: string }) {
       <div className="flex items-center gap-2 mb-2 flex-wrap">
         <span className="font-semibold text-white text-sm">{child.first_name} {child.last_name}</span>
         {role && <span className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold ${ROLE_COLORS[role]}`}>{ROLE_LABELS[role]}</span>}
-        <span className="text-[10px] text-slate-500">{getAge(child.dob)} ans · {band} · {vacation ? "🌴 Vacances" : "🏫 Scolaire"}</span>
+        <span className="text-[10px] text-slate-500">{getAge(child.dob)} ans · {AGE_BAND_LABELS[band as keyof typeof AGE_BAND_LABELS] || band} · {vacation ? "🌴 Vacances" : "🏫 Scolaire"}{!isMinor(child.dob) && <span className="text-amber-400"> · ⚠ majeur·e</span>}</span>
       </div>
       {!stats ? (
         <div className="text-xs text-slate-500">Pas de session enregistrée</div>

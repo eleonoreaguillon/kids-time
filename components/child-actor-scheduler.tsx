@@ -9,7 +9,7 @@ const supabase = createClient(
 );
 
 export type Period = "school" | "vacation";
-export type AgeBand = "0-2" | "3-5" | "6-11" | "12-16";
+export type AgeBand = "0-2" | "3-5" | "6-11" | "12-16" | "16-18";
 export type ChildRole = "role" | "silhouette" | "figurant";
 
 export interface Rules {
@@ -94,12 +94,16 @@ const DEFAULT_RULES: Rules = {
     "3-5":  { school: 120, vacation: 120 },
     "6-11": { school: 180, vacation: 240 },
     "12-16":{ school: 240, vacation: 360 },
+    // 16-18 (revolus) : 8h/jour (Code du travail, mineurs >= 16 ans)
+    "16-18":{ school: 480, vacation: 480 },
   },
   mandatoryBreakAfterMinutes: {
     "0-2":  { school: 30,  vacation: 30  },
     "3-5":  { school: 60,  vacation: 60  },
     "6-11": { school: 90,  vacation: 120 },
     "12-16":{ school: 120, vacation: 180 },
+    // 16-18 : pause obligatoire de 30 min apres 4h30 de travail continu
+    "16-18":{ school: 270, vacation: 270 },
   },
   maxAmplitudeMinutes: 480,
   minBreakMinutes: 15,
@@ -107,7 +111,20 @@ const DEFAULT_RULES: Rules = {
   maxDaysPerWeek: 5,
 };
 
-const AGE_BANDS: AgeBand[] = ["0-2", "3-5", "6-11", "12-16"];
+const AGE_BANDS: AgeBand[] = ["0-2", "3-5", "6-11", "12-16", "16-18"];
+export const AGE_BAND_LABELS: Record<AgeBand, string> = {
+  "0-2": "< 3 ans", "3-5": "3-5 ans", "6-11": "6-11 ans", "12-16": "12-15 ans", "16-18": "16-17 ans",
+};
+// Repos quotidien minimum (en minutes) : 14h pour < 16 ans, 12h pour 16-18
+const MIN_DAILY_REST_BY_BAND: Record<AgeBand, number> = {
+  "0-2": 14 * 60, "3-5": 14 * 60, "6-11": 14 * 60, "12-16": 14 * 60, "16-18": 12 * 60,
+};
+// Heure par defaut au-dela de laquelle le travail necessite une derogation
+const DEFAULT_NIGHT_LIMIT_BY_BAND: Record<AgeBand, string> = {
+  "0-2": "20:00", "3-5": "20:00", "6-11": "20:00", "12-16": "20:00",
+  // 16-18 : derogation requise pour travailler entre 22h et minuit
+  "16-18": "22:00",
+};
 export const ROLE_LABELS: Record<ChildRole, string> = { role: "Rôle", silhouette: "Silhouette", figurant: "Figurant·e" };
 export const ROLE_COLORS: Record<ChildRole, string> = {
   role:       "bg-purple-900/40 text-purple-300 border-purple-700",
@@ -135,7 +152,24 @@ export function getAge(dob: string): number {
 }
 export function getAgeBand(dob: string): AgeBand {
   const a = getAge(dob);
-  if (a < 3) return "0-2"; if (a < 6) return "3-5"; if (a < 12) return "6-11"; return "12-16";
+  if (a < 3) return "0-2";
+  if (a < 6) return "3-5";
+  if (a < 12) return "6-11";
+  if (a < 16) return "12-16";
+  return "16-18"; // >= 16 (les 18+ ne sont plus mineurs mais on les rattache
+                  // a cette tranche : un message majeur·e est affiche en UI)
+}
+export function isMinor(dob: string): boolean { return getAge(dob) < 18; }
+
+// Assure que toutes les bandes d'age sont presentes dans rules (retro-compat
+// pour les projets crees avant l'ajout de "16-18").
+export function normalizeRules(rules: Rules): Rules {
+  const next: any = JSON.parse(JSON.stringify(rules));
+  for (const band of AGE_BANDS) {
+    if (!next.maxWorkMinutes[band]) next.maxWorkMinutes[band] = { ...DEFAULT_RULES.maxWorkMinutes[band] };
+    if (!next.mandatoryBreakAfterMinutes[band]) next.mandatoryBreakAfterMinutes[band] = { ...DEFAULT_RULES.mandatoryBreakAfterMinutes[band] };
+  }
+  return next as Rules;
 }
 export function formatMinutes(min: number | null | undefined): string {
   if (min == null || isNaN(min)) return "0min";
@@ -400,7 +434,7 @@ export function exportChildAllDays(project: Project, child: Child) {
   @media print{.back-btn{display:none}}</style></head><body>
   <button class="back-btn" onclick="window.close()">← Retour</button>
   <h1>KidsTime — Journées de ${child.first_name} ${child.last_name}</h1>
-  <h2>${child.role ? ROLE_LABELS[child.role] + " · " : ""}${getAge(child.dob)} ans · Tranche ${getAgeBand(child.dob)} ans · ${project.name}</h2>
+  <h2>${child.role ? ROLE_LABELS[child.role] + " · " : ""}${getAge(child.dob)} ans · Tranche ${AGE_BAND_LABELS[getAgeBand(child.dob)]} · ${project.name}</h2>
   <table><thead><tr>
     <th>Date</th><th>Période</th><th>Début</th><th>Fin</th><th>Amplitude</th><th>Travail / Max</th><th>🍽 Déjeuner</th>${child.school_tracking ? "<th>📚 Suivi sco.</th>" : ""}<th>Pauses valides</th><th>Plages déjeuner / pauses${child.school_tracking ? " / sco." : ""}</th>
   </tr></thead><tbody>`;
@@ -820,6 +854,8 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     const projAny: any = { ...(proj || {}) };
     const share_password_set = !!projAny.share_password;
     delete projAny.share_password;
+    // Retro-compat : ajoute les bandes d age manquantes dans les regles
+    if (projAny.rules) projAny.rules = normalizeRules(projAny.rules);
     return { ...projAny, share_password_set, children: mappedChildren, groups: groups || [], shootingDays };
   }
 
@@ -1700,7 +1736,7 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
               <div className="w-9 h-9 rounded-full bg-blue-900/60 flex items-center justify-center text-blue-300 font-bold text-sm flex-shrink-0">{c.first_name?.[0]}{c.last_name?.[0]}</div>
               <div className="flex-1 min-w-0">
                 <div className="font-semibold text-white text-sm truncate">{c.first_name} {c.last_name}</div>
-                <div className="text-xs text-slate-400">{getAge(c.dob)} ans · {getAgeBand(c.dob)} ans</div>
+                <div className="text-xs text-slate-400">{getAge(c.dob)} ans · {AGE_BAND_LABELS[getAgeBand(c.dob)]}{!isMinor(c.dob) && <span className="text-amber-400"> · ⚠ majeur·e</span>}</div>
               </div>
               {c.role && <RoleBadge role={c.role} />}
             </div>
@@ -1803,7 +1839,7 @@ function SettingsTab({ rules, onUpdateRules, projectName, onRename, onDelete }: 
     catch { setRenameMsg("error"); }
   }
   const canRename = nameDraft.trim().length > 0 && nameDraft.trim() !== projectName;
-  const BL: Record<AgeBand, string> = { "0-2": "< 3 ans", "3-5": "3–5 ans", "6-11": "6–11 ans", "12-16": "12–16 ans" };
+  const BL: Record<AgeBand, string> = AGE_BAND_LABELS;
   return (
     <div className="space-y-4">
       {/* Nom du projet */}
@@ -1905,7 +1941,12 @@ function ChildFormModal({ child, onSave, onClose }: { child: Child | null; onSav
       <div className="space-y-3">
         <TextInput label="Prénom Nom" required value={fullName} onChange={e => setFullName(e.target.value)} placeholder="Ex: Léa Martin" />
         <TextInput label="Date de naissance" required type="date" value={dob} onChange={e => setDob(e.target.value)} />
-        {dob && <div className="bg-blue-900/30 border border-blue-700/60 rounded-lg px-3 py-2 text-sm text-blue-300">{getAge(dob)} ans · Tranche {getAgeBand(dob)} ans</div>}
+        {dob && (
+          <div className={`border rounded-lg px-3 py-2 text-sm ${isMinor(dob) ? "bg-blue-900/30 border-blue-700/60 text-blue-300" : "bg-amber-900/30 border-amber-700/60 text-amber-200"}`}>
+            {getAge(dob)} ans · Tranche {AGE_BAND_LABELS[getAgeBand(dob)]}
+            {!isMinor(dob) && <div className="text-[10px] text-amber-300/80 mt-1">⚠️ Majeur·e — hors champ DRIEETS. Les règles affichées le sont à titre indicatif.</div>}
+          </div>
+        )}
         <div className="flex flex-col gap-1">
           <label className="text-[10px] text-slate-400 uppercase tracking-[0.15em] font-semibold">Statut <span className="text-slate-600 font-normal normal-case">(optionnel)</span></label>
           <div className="flex gap-2 flex-wrap">
@@ -2230,9 +2271,9 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
   const ampWarn  = stats && stats.amplitudeMin === maxAmplitude;
   const breakDue = stats?.timeSinceBreak != null && stats.timeSinceBreak >= breakAfter;
 
-  // Alerte 20h (ou heure de dérogation si définie pour cette date)
+  // Alerte horaire (heure de derogation si definie, sinon defaut par bande d age)
   const derogation = (child.derogations || []).find(d => d.date === dateStr);
-  const limitTimeStr = derogation ? derogation.end_time : "20:00";
+  const limitTimeStr = derogation ? derogation.end_time : DEFAULT_NIGHT_LIMIT_BY_BAND[getAgeBand(child.dob)];
   const limitDate = new Date(`${dateStr}T${limitTimeStr}:00`);
   const pastTimeLimit = session?.start_time != null && session.status !== "done" && new Date() >= limitDate;
 
