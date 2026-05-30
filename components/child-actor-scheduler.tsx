@@ -1612,7 +1612,7 @@ function ChildDeleteConfirmModal({ child, onConfirm, onClose }: { child: Child; 
   const [confirmName, setConfirmName] = useState("");
   const fullName = `${child.first_name} ${child.last_name}`.trim();
   const canContinue = understood;
-  const canDelete = confirmName.trim().toLowerCase() === fullName.toLowerCase();
+  const canDelete = normalize(confirmName) === normalize(fullName);
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm px-4 pb-4" onClick={onClose}>
