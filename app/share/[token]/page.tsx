@@ -81,56 +81,42 @@ function ChildDetailRow({ row, dateStr }: { row: any; dateStr: string }) {
   );
 }
 
-// ─── CalendarTab ──────────────────────────────────────────────────────────────
+// ─── CalendarTab (mirrors host layout exactly) ────────────────────────────────
 function CalendarTab({ project }: { project: Project }) {
-  const days = Object.values(project.shootingDays).sort((a, b) => a.date.localeCompare(b.date));
-  const firstDay = days[0]?.date;
-  const initMonth = firstDay ? firstDay.slice(0, 7) : new Date().toISOString().slice(0, 7);
-  const [curMonth, setCurMonth] = useState(initMonth);
+  const [cur, setCur] = useState(() => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), 1); });
   const [openDate, setOpenDate] = useState<string | null>(null);
-
-  const [year, month] = curMonth.split("-").map(Number);
-  const firstDow = new Date(year, month - 1, 1).getDay();
-  const daysInMonth = new Date(year, month, 0).getDate();
-  const startOffset = (firstDow + 6) % 7;
-  const shootingDates = new Set(days.map(d => d.date));
-  const monthNames = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
-  const dayAbbr = ["L","M","M","J","V","S","D"];
-
-  function shift(delta: number) {
-    const d = new Date(year, month - 1 + delta, 1);
-    setCurMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
-  }
-
-  const cells: (number | null)[] = [...Array(startOffset).fill(null), ...Array.from({ length: daysInMonth }, (_, i) => i + 1)];
-  while (cells.length % 7 !== 0) cells.push(null);
+  const y = cur.getFullYear(), m = cur.getMonth();
+  const firstDay = (new Date(y, m, 1).getDay() + 6) % 7, daysInMonth = new Date(y, m + 1, 0).getDate();
+  const cells = [...Array(firstDay).fill(null), ...Array.from({ length: daysInMonth }, (_, i) => i + 1)];
+  const MN = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
+  const DN = ["L","M","M","J","V","S","D"];
+  const todayStrLocal = new Date().toISOString().slice(0, 10);
+  function ds(d: number) { return `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`; }
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <button onClick={() => shift(-1)} className="w-9 h-9 flex items-center justify-center rounded-xl border border-slate-700 text-slate-400 hover:text-white">‹</button>
-        <span className="font-bold text-white" style={{ fontFamily: "Syne, sans-serif" }}>{monthNames[month - 1]} {year}</span>
-        <button onClick={() => shift(1)} className="w-9 h-9 flex items-center justify-center rounded-xl border border-slate-700 text-slate-400 hover:text-white">›</button>
-      </div>
-      <div className="grid grid-cols-7 gap-1">
-        {dayAbbr.map((d, i) => <div key={i} className="text-center text-[10px] text-slate-500 font-semibold py-1">{d}</div>)}
-        {cells.map((day, i) => {
-          if (!day) return <div key={i} />;
-          const dateStr = `${curMonth}-${String(day).padStart(2, "0")}`;
-          const isShooting = shootingDates.has(dateStr);
-          const count = project.shootingDays[dateStr]?.child_ids?.length ?? 0;
-          return (
-            <button key={i}
-              onClick={() => isShooting && setOpenDate(openDate === dateStr ? null : dateStr)}
-              className={`aspect-square rounded-xl flex flex-col items-center justify-center text-xs font-semibold transition-colors
-                ${isShooting
-                  ? openDate === dateStr ? "bg-blue-600 text-white" : "bg-blue-900/50 border border-blue-700/60 text-blue-300 hover:bg-blue-800/60"
-                  : "text-slate-600"}`}>
-              <span>{day}</span>
-              {isShooting && <span className="text-[8px] opacity-70">{count}👦</span>}
-            </button>
-          );
-        })}
+      <div>
+        <div className="flex items-center justify-between mb-4">
+          <button onClick={() => setCur(new Date(y, m - 1, 1))} className="text-slate-400 w-10 h-10 rounded-lg border border-slate-700 flex items-center justify-center text-lg">‹</button>
+          <h2 className="font-bold text-base" style={{ fontFamily: "Syne, sans-serif" }}>{MN[m]} {y}</h2>
+          <button onClick={() => setCur(new Date(y, m + 1, 1))} className="text-slate-400 w-10 h-10 rounded-lg border border-slate-700 flex items-center justify-center text-lg">›</button>
+        </div>
+        <div className="grid grid-cols-7 gap-1 mb-1">{DN.map((d, i) => <div key={i} className="text-center text-[10px] text-slate-500 py-1 uppercase tracking-wider">{d}</div>)}</div>
+        <div className="grid grid-cols-7 gap-1">
+          {cells.map((d, i) => {
+            if (!d) return <div key={i} />;
+            const s = ds(d);
+            const dayData = project.shootingDays[s];
+            const validChildIds = (dayData?.child_ids || []).filter(id => project.children.find(c => c.id === id));
+            const count = validChildIds.length, isShoot = count > 0, isToday = s === todayStrLocal;
+            return (
+              <button key={i} onClick={() => isShoot && setOpenDate(openDate === s ? null : s)} className={`rounded-xl py-2.5 text-sm transition-all ${isShoot ? "bg-blue-900/50 border border-blue-600 text-blue-200" : "bg-slate-900/40 border border-slate-800 text-slate-400"} ${isToday ? "ring-2 ring-blue-400" : ""}`}>
+                <div className="font-bold text-sm">{d}</div>
+                {isShoot && <div className="text-[9px] text-blue-400">{count}👦</div>}
+              </button>
+            );
+          })}
+        </div>
       </div>
       {openDate && (() => {
         const rows = sortByRoleThenAlpha(buildExportRows(project, openDate).map((r: any) => r._child))
