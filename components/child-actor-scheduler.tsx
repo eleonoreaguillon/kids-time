@@ -967,7 +967,6 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     onArchiveChild={archiveChild}
     onAddGroup={addGroup} onUpdateGroup={updateGroup} onRemoveGroup={removeGroup} onUpdateRules={updateRules}
     onOpenDay={date => { setActiveDate(date); setView("shooting"); }}
-    onExportProject={() => exportProjectGlobal(activeProject)}
     onExportProjectPDF={() => exportProjectGlobalPDF(activeProject)}
     onExportChildDays={child => exportChildAllDays(activeProject, child)}
     onDelete={() => { deleteProject(activeProject.id); setView("home"); loadProjects(); }}
@@ -990,7 +989,6 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     onEditEventTime={(cid, idx, t) => editEventTime(activeDate, cid, idx, t)}
     onEditStartTime={(cid, t) => editStartTime(activeDate, cid, t)}
     onEditEndTime={(cid, t) => editEndTime(activeDate, cid, t)}
-    onExportXLSX={() => exportDayToXLSX(activeProject, activeDate)}
     onExportPDF={() => exportDayToPDF(activeProject, activeDate)} /></>;
   return null;
 }
@@ -1149,14 +1147,14 @@ function HomeView({ projects, userEmail, onCreate, onOpen, onSignOut }: { projec
   );
 }
 
-function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild, onRemoveChild, onArchiveChild, onAddGroup, onUpdateGroup, onRemoveGroup, onUpdateRules, onOpenDay, onExportProject, onExportProjectPDF, onExportChildDays, onDelete, onGenerateShareToken, onSetSharePassword, onRevokeShareToken }: {
+function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild, onRemoveChild, onArchiveChild, onAddGroup, onUpdateGroup, onRemoveGroup, onUpdateRules, onOpenDay, onExportProjectPDF, onExportChildDays, onDelete, onGenerateShareToken, onSetSharePassword, onRevokeShareToken }: {
   project: Project; onBack: () => void;
   onAddChild: (c: any) => void; onAddChildren: (cs: any[]) => Promise<void>;
   onUpdateChild: (id: string, d: any) => void; onRemoveChild: (id: string) => void;
   onArchiveChild: (id: string, archived: boolean) => void;
   onAddGroup: (name: string) => void; onUpdateGroup: (id: string, d: any) => void; onRemoveGroup: (id: string) => void;
   onUpdateRules: (fn: (r: Rules) => Rules) => void; onOpenDay: (date: string) => void;
-  onExportProject: () => void; onExportProjectPDF: () => void;
+  onExportProjectPDF: () => void;
   onExportChildDays: (child: Child) => void;
   onDelete: () => void;
   onGenerateShareToken: () => Promise<string>;
@@ -1181,11 +1179,10 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
       </div>
       {shareModal && <ShareModal project={project} onClose={() => setShareModal(false)} onGenerate={onGenerateShareToken} onSetPassword={onSetSharePassword} onRevoke={onRevokeShareToken} />}
 
-      {/* Fix #5/#6: project export buttons */}
+      {/* Fix #5/#6: project export button */}
       {tab === "calendar" && (
-        <div className="px-4 pt-3 flex gap-2">
-          <button onClick={onExportProjectPDF} className="flex-1 text-xs text-blue-400 border border-blue-800/60 px-3 py-2 rounded-lg">📄 Récap. global PDF</button>
-          <button onClick={onExportProject} className="flex-1 text-xs text-emerald-400 border border-emerald-800/60 px-3 py-2 rounded-lg">📊 Récap. global Excel</button>
+        <div className="px-4 pt-3">
+          <button onClick={onExportProjectPDF} className="w-full text-xs text-blue-400 border border-blue-800/60 px-3 py-2 rounded-lg">📄 Récap. global PDF</button>
         </div>
       )}
 
@@ -1612,7 +1609,7 @@ function GroupFormModal({ group, onSave, onClose }: { group: Group | null; onSav
 }
 
 // Fix #1: ShootingView — mobile-optimised compact cards + Fix #7: selection count
-function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSession, onCancelSession, onApplyEvent, onCancelLastEvent, onEndSessions, onReopenSession, onToggleChild, onAddGroup, onRemoveGroup, onEditEventTime, onEditStartTime, onEditEndTime, onExportXLSX, onExportPDF }: {
+function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSession, onCancelSession, onApplyEvent, onCancelLastEvent, onEndSessions, onReopenSession, onToggleChild, onAddGroup, onRemoveGroup, onEditEventTime, onEditStartTime, onEditEndTime, onExportPDF }: {
   project: Project; dateStr: string; onBack: () => void;
   onStartSessions: (cids: string[], t?: string) => void; onStartSession: (cid: string, t?: string) => void;
   onCancelSession: (cid: string) => void; onApplyEvent: (cids: string[], type: "pause_start" | "pause_end" | "dejeuner_start" | "dejeuner_end", t?: string) => void;
@@ -1620,7 +1617,7 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
   onReopenSession: (cid: string) => void; onToggleChild: (cid: string) => void;
   onAddGroup: (gid: string) => void; onRemoveGroup: (gid: string) => void;
   onEditEventTime: (cid: string, idx: number, t: string) => void; onEditStartTime: (cid: string, t: string) => void; onEditEndTime: (cid: string, t: string) => void;
-  onExportXLSX: () => void; onExportPDF: () => void;
+  onExportPDF: () => void;
 }) {
   const [, setTick] = useState(0);
   const [addingChildren, setAdding] = useState(false);
@@ -1668,7 +1665,6 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
             <div className="text-xs text-slate-400">{childIds.length} enfant(s) · <span className={selected.size > 0 ? "text-blue-400 font-semibold" : ""}>{selected.size} sélectionné(s)</span></div>
           </div>
           <button onClick={onExportPDF} className="text-xs text-blue-400 border border-blue-800/60 px-2 py-1.5 rounded-lg flex-shrink-0">PDF</button>
-          <button onClick={onExportXLSX} className="text-xs text-emerald-400 border border-emerald-800/60 px-2 py-1.5 rounded-lg flex-shrink-0">XLS</button>
         </div>
 
         {/* Fix #7: action bar with count badge always showing */}

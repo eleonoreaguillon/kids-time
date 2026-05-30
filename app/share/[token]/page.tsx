@@ -6,8 +6,8 @@ import {
   ROLE_LABELS, ROLE_COLORS, ALL_ROLES,
   getAge, getAgeBand, formatMinutes, formatTime, isVacation,
   computeSessionStats, buildExportRows,
-  exportDayToXLSX, exportDayToPDF, exportChildAllDays,
-  exportProjectGlobal, exportProjectGlobalPDF,
+  exportDayToPDF, exportChildAllDays,
+  exportProjectGlobalPDF,
   type Project, type Child, type ShootingDay, type ChildRole,
 } from "@/components/child-actor-scheduler";
 
@@ -126,10 +126,7 @@ function CalendarTab({ project }: { project: Project }) {
           <div className="bg-slate-900/60 border border-slate-700 rounded-2xl p-4 space-y-3">
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <div className="font-bold text-white capitalize" style={{ fontFamily: "Syne, sans-serif" }}>{dateLabel}</div>
-              <div className="flex gap-2">
-                <button onClick={() => exportDayToPDF(project, openDate)} className="text-xs text-blue-400 border border-blue-800/60 px-2 py-1 rounded-lg">📄 PDF</button>
-                <button onClick={() => exportDayToXLSX(project, openDate)} className="text-xs text-emerald-400 border border-emerald-800/60 px-2 py-1 rounded-lg">📊 Excel</button>
-              </div>
+              <button onClick={() => exportDayToPDF(project, openDate)} className="text-xs text-blue-400 border border-blue-800/60 px-2 py-1 rounded-lg">📄 PDF</button>
             </div>
             <div className="text-xs text-slate-400">{rows.length} enfant(s)</div>
             {rows.length === 0
@@ -229,10 +226,9 @@ function ReadOnlyView({ project }: { project: Project }) {
         <div className="ml-auto text-xs text-slate-500 text-right">{children.length} enfant(s)<br />{dayCount} jour(s)</div>
       </div>
 
-      {/* Global export buttons */}
-      <div className="px-4 pt-3 flex gap-2">
-        <button onClick={() => exportProjectGlobalPDF(project)} className="flex-1 text-xs text-blue-400 border border-blue-800/60 px-3 py-2 rounded-lg">📄 Récap. global PDF</button>
-        <button onClick={() => exportProjectGlobal(project)} className="flex-1 text-xs text-emerald-400 border border-emerald-800/60 px-3 py-2 rounded-lg">📊 Récap. global Excel</button>
+      {/* Global export button */}
+      <div className="px-4 pt-3">
+        <button onClick={() => exportProjectGlobalPDF(project)} className="w-full text-xs text-blue-400 border border-blue-800/60 px-3 py-2 rounded-lg">📄 Récap. global PDF</button>
       </div>
 
       <div className="px-4 py-4">
