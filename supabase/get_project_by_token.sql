@@ -70,12 +70,18 @@ BEGIN
   FROM groups g
   WHERE g.project_id = v_project.id;
 
-  -- 5) Charge les journées de tournage — chaque ligne garde son child_ids
-  --    propre, aucun cross-join, aucune agrégation entre dates.
+  -- 5) Charge les journées de tournage — une seule ligne par date, en gardant
+  --    celle qui a le plus d'enfants (anti-doublons défensifs).
   SELECT COALESCE(jsonb_agg(to_jsonb(s.*) ORDER BY s.date), '[]'::jsonb)
     INTO v_days
-  FROM shooting_days s
-  WHERE s.project_id = v_project.id;
+  FROM (
+    SELECT DISTINCT ON (date) *
+    FROM shooting_days
+    WHERE project_id = v_project.id
+    ORDER BY date,
+             jsonb_array_length(COALESCE(child_ids, '[]'::jsonb)) DESC,
+             id
+  ) s;
 
   -- 6) Renvoie le payload final (sans share_password)
   RETURN jsonb_build_object(
