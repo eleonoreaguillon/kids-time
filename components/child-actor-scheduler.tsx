@@ -2113,6 +2113,135 @@ function GroupFormModal({ group, onSave, onClose }: { group: Group | null; onSav
 }
 
 // Fix #1: ShootingView — mobile-optimised compact cards + Fix #7: selection count
+function ManageChildrenList({ project, childIds, onToggleChild, onPendingUncheck }: {
+  project: Project;
+  childIds: string[];
+  onToggleChild: (cid: string) => void;
+  onPendingUncheck: (c: Child) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [roleFilter, setRoleFilter] = useState<ChildRole | "all">("all");
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+
+  const active = project.children.filter(c => !c.archived);
+  const sorted = sortByRoleThenAlpha(active);
+  const q = normalize(search);
+  const filtered = sorted.filter(c => {
+    if (roleFilter !== "all" && (c.role || null) !== roleFilter) return false;
+    if (q) {
+      const hay = normalize(`${c.first_name} ${c.last_name}`);
+      const hay2 = normalize(`${c.last_name} ${c.first_name}`);
+      if (!hay.includes(q) && !hay2.includes(q)) return false;
+    }
+    return true;
+  });
+
+  // Regroupe par statut
+  type SectionKey = ChildRole | "none";
+  const sections: { key: SectionKey; label: string; children: Child[] }[] = [];
+  const buckets: Record<SectionKey, Child[]> = { role: [], silhouette: [], figurant: [], none: [] };
+  for (const c of filtered) buckets[(c.role || "none") as SectionKey].push(c);
+  const order: SectionKey[] = ["role", "silhouette", "figurant", "none"];
+  const labels: Record<SectionKey, string> = { role: "Rôle", silhouette: "Silhouette", figurant: "Figurant·e", none: "Sans statut" };
+  for (const k of order) if (buckets[k].length > 0) sections.push({ key: k, label: labels[k], children: buckets[k] });
+
+  const totalSelected = active.filter(c => childIds.includes(c.id)).length;
+  const counts = ALL_ROLES.map(r => ({ r, n: active.filter(c => c.role === r).length, sel: active.filter(c => c.role === r && childIds.includes(c.id)).length }));
+  const noneN = active.filter(c => !c.role).length;
+  const noneSel = active.filter(c => !c.role && childIds.includes(c.id)).length;
+
+  function toggleSection(key: string) { setCollapsed(s => ({ ...s, [key]: !s[key] })); }
+
+  function selectAllInSection(children: Child[]) {
+    for (const c of children) if (!childIds.includes(c.id)) onToggleChild(c.id);
+  }
+  function deselectAllInSection(children: Child[]) {
+    for (const c of children) if (childIds.includes(c.id)) onPendingUncheck(c);
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* Header : recherche + compteur global */}
+      <div className="flex items-center gap-2">
+        <input
+          type="text"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="🔍 Rechercher par nom…"
+          className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 placeholder:text-slate-500"
+        />
+        <span className="text-[10px] bg-blue-700/40 text-blue-200 px-2 py-1 rounded-lg font-bold whitespace-nowrap">{totalSelected}/{active.length}</span>
+      </div>
+
+      {/* Filtres rapides par statut */}
+      <div className="flex gap-1.5 overflow-x-auto pb-1">
+        <button onClick={() => setRoleFilter("all")} className={`text-[10px] px-2 py-1 rounded-lg border whitespace-nowrap ${roleFilter === "all" ? "bg-blue-700 border-blue-500 text-white" : "bg-slate-800 border-slate-600 text-slate-400"}`}>
+          Tous <span className="opacity-60">({active.length})</span>
+        </button>
+        {counts.filter(c => c.n > 0).map(({ r, n, sel }) => (
+          <button key={r} onClick={() => setRoleFilter(r)} className={`text-[10px] px-2 py-1 rounded-lg border whitespace-nowrap ${roleFilter === r ? "bg-blue-700 border-blue-500 text-white" : "bg-slate-800 border-slate-600 text-slate-400"}`}>
+            {ROLE_LABELS[r]} <span className="opacity-60">({sel}/{n})</span>
+          </button>
+        ))}
+        {noneN > 0 && (
+          <button onClick={() => setRoleFilter("all")} disabled className="text-[10px] px-2 py-1 rounded-lg border bg-slate-800/40 border-slate-700 text-slate-600 whitespace-nowrap">
+            Sans statut <span className="opacity-60">({noneSel}/{noneN})</span>
+          </button>
+        )}
+      </div>
+
+      {/* Sections par statut */}
+      {sections.length === 0 && (
+        <div className="text-center text-slate-500 text-xs py-4">Aucun enfant{search ? ` ne correspond à "${search}"` : ""}.</div>
+      )}
+      {sections.map(({ key, label, children }) => {
+        const sectionSel = children.filter(c => childIds.includes(c.id)).length;
+        const allSel = sectionSel === children.length;
+        const isCollapsed = !!collapsed[key];
+        return (
+          <div key={key} className="bg-slate-900/40 border border-slate-700 rounded-xl overflow-hidden">
+            <div className="flex items-center gap-2 px-3 py-2 bg-slate-800/50">
+              <button onClick={() => toggleSection(key)} className="flex-1 text-left text-xs font-semibold text-slate-200 flex items-center gap-2">
+                <span className="text-slate-500">{isCollapsed ? "▸" : "▾"}</span>
+                <span>{label}</span>
+                <span className="text-[10px] text-slate-500 font-normal">{sectionSel}/{children.length}</span>
+              </button>
+              <button
+                onClick={() => allSel ? deselectAllInSection(children) : selectAllInSection(children)}
+                className={`text-[10px] px-2 py-1 rounded-lg border whitespace-nowrap ${allSel ? "border-red-800/60 text-red-400" : "border-slate-700 text-slate-400 hover:text-white"}`}
+              >
+                {allSel ? "Tout décocher" : "Tout cocher"}
+              </button>
+            </div>
+            {!isCollapsed && (
+              <div className="divide-y divide-slate-800">
+                {children.map(c => {
+                  const checked = childIds.includes(c.id);
+                  return (
+                    <label key={c.id} className="flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-slate-800/30 transition-colors">
+                      <input
+                        type="checkbox"
+                        className="accent-blue-500 w-5 h-5 flex-shrink-0"
+                        checked={checked}
+                        onChange={() => {
+                          if (checked) onPendingUncheck(c);
+                          else onToggleChild(c.id);
+                        }}
+                      />
+                      <span className="text-sm text-slate-200 flex-1 truncate">{c.last_name} {c.first_name}</span>
+                      <span className="text-[10px] text-slate-500 whitespace-nowrap">{getAge(c.dob)} ans</span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSession, onCancelSession, onApplyEvent, onCancelLastEvent, onEndSessions, onReopenSession, onToggleChild, onAddGroup, onRemoveGroup, onEditEventTime, onEditStartTime, onEditEndTime, onExportPDF }: {
   project: Project; dateStr: string; onBack: () => void;
   onStartSessions: (cids: string[], t?: string) => void; onStartSession: (cid: string, t?: string) => void;
@@ -2222,18 +2351,12 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
                   })}</div>
                 </div>
               )}
-              <div className="text-[10px] text-slate-400 uppercase tracking-wider mb-2">Individuellement</div>
-              <div className="space-y-0.5">{project.children.filter(c => !c.archived).map(c => (
-                <label key={c.id} className="flex items-center gap-3 py-2.5 cursor-pointer">
-                  <input type="checkbox" className="accent-blue-500 w-5 h-5" checked={childIds.includes(c.id)}
-                    onChange={() => {
-                      if (childIds.includes(c.id)) { setPendingUncheck(c); }
-                      else { onToggleChild(c.id); }
-                    }} />
-                  <span className="text-sm text-slate-200 flex-1">{c.first_name} {c.last_name}</span>
-                  {c.role && <RoleBadge role={c.role} />}
-                </label>
-              ))}</div>
+              <ManageChildrenList
+                project={project}
+                childIds={childIds}
+                onToggleChild={onToggleChild}
+                onPendingUncheck={setPendingUncheck}
+              />
             </div>
           )}
         </div>
