@@ -836,29 +836,59 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
 
   const loadProjects = useCallback(async () => {
     setLoading(true);
-    const { data } = await supabase.from("projects").select("*").eq("user_id", userId).order("created_at");
-    setProjects((data || []) as Project[]); setLoading(false);
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      setProjects(ktLoadProjectList(userId));
+      setLoading(false);
+      return;
+    }
+    const { data, error } = await supabase.from("projects").select("*").eq("user_id", userId).order("created_at");
+    if (error || !data) {
+      setProjects(ktLoadProjectList(userId));
+    } else {
+      const list = data as Project[];
+      setProjects(list);
+      ktCacheProjectList(userId, list);
+    }
+    setLoading(false);
   }, [userId]);
 
   useEffect(() => { loadProjects(); }, [loadProjects]);
 
   async function loadFullProject(id: string): Promise<Project> {
-    const [{ data: proj }, { data: children }, { data: groups }, { data: days }] = await Promise.all([
-      supabase.from("projects").select("*").eq("id", id).single(),
-      supabase.from("children").select("*").eq("project_id", id),
-      supabase.from("groups").select("*").eq("project_id", id),
-      supabase.from("shooting_days").select("*").eq("project_id", id),
-    ]);
-    const shootingDays: Record<string, ShootingDay> = {};
-    (days || []).forEach((d: ShootingDay) => { shootingDays[d.date] = d; });
-    const mappedChildren = (children || []).map((c: any) => ({ ...c, role: c.child_role ?? undefined }));
-    // Derive un booleen et evite d exposer le hash bcrypt aux composants enfants
-    const projAny: any = { ...(proj || {}) };
-    const share_password_set = !!projAny.share_password;
-    delete projAny.share_password;
-    // Retro-compat : ajoute les bandes d age manquantes dans les regles
-    if (projAny.rules) projAny.rules = normalizeRules(projAny.rules);
-    return { ...projAny, share_password_set, children: mappedChildren, groups: groups || [], shootingDays };
+    // Hors-ligne : on sert depuis le cache local sans toucher au reseau
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      const cached = ktLoadProject(id);
+      if (cached) return cached;
+      // Pas de cache : on renvoie un projet minimal et on laisse le composant
+      // gerer (cas tres rare : 1er chargement offline)
+      throw new Error("offline_no_cache");
+    }
+    try {
+      const [{ data: proj, error: pErr }, { data: children }, { data: groups }, { data: days }] = await Promise.all([
+        supabase.from("projects").select("*").eq("id", id).single(),
+        supabase.from("children").select("*").eq("project_id", id),
+        supabase.from("groups").select("*").eq("project_id", id),
+        supabase.from("shooting_days").select("*").eq("project_id", id),
+      ]);
+      if (pErr || !proj) throw pErr || new Error("no_project");
+      const shootingDays: Record<string, ShootingDay> = {};
+      (days || []).forEach((d: ShootingDay) => { shootingDays[d.date] = d; });
+      const mappedChildren = (children || []).map((c: any) => ({ ...c, role: c.child_role ?? undefined }));
+      // Derive un booleen et evite d exposer le hash bcrypt aux composants enfants
+      const projAny: any = { ...(proj || {}) };
+      const share_password_set = !!projAny.share_password;
+      delete projAny.share_password;
+      // Retro-compat : ajoute les bandes d age manquantes dans les regles
+      if (projAny.rules) projAny.rules = normalizeRules(projAny.rules);
+      const full = { ...projAny, share_password_set, children: mappedChildren, groups: groups || [], shootingDays } as Project;
+      ktCacheProject(full);
+      return full;
+    } catch (e) {
+      // Repli vers le cache si on a perdu le reseau pendant la requete
+      const cached = ktLoadProject(id);
+      if (cached) return cached;
+      throw e;
+    }
   }
 
   async function openProject(id: string) {
@@ -878,7 +908,11 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
 
   async function refreshActive() {
     if (!activeProject?.id) return;
-    const f = await loadFullProject(activeProject.id); setActiveProject(f);
+    if (typeof navigator !== "undefined" && !navigator.onLine) return; // hors-ligne : on garde l etat optimiste
+    try {
+      const f = await loadFullProject(activeProject.id);
+      setActiveProject(f);
+    } catch { /* on garde l etat actuel si la requete echoue */ }
   }
 
   async function createProject(name: string) {
@@ -956,34 +990,80 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     await loadProjects();
   }
 
-  async function getOrCreateDay(dateStr: string): Promise<ShootingDay> {
-    let day = activeProject!.shootingDays[dateStr];
-    if (!day) { const { data } = await supabase.from("shooting_days").insert({ project_id: activeProject!.id, date: dateStr, child_ids: [], sessions: {} }).select().single(); day = data as ShootingDay; }
-    return day;
+  // ─── Helpers offline ────────────────────────────────────────────────────
+  // Cree localement un jour si necessaire (UUID cote client pour autoriser le
+  // mode hors-ligne)
+  function ensureLocalDay(dateStr: string): ShootingDay {
+    const existing = activeProject!.shootingDays[dateStr];
+    if (existing) return existing;
+    return {
+      id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
+      project_id: activeProject!.id,
+      date: dateStr,
+      child_ids: [],
+      sessions: {},
+    };
   }
-  async function updateDaySessions(dateStr: string, sessions: Record<string, Session>) { const day = await getOrCreateDay(dateStr); await supabase.from("shooting_days").update({ sessions }).eq("id", day.id); await refreshActive(); }
+  // Applique le nouvel etat d un jour : MAJ activeProject + cache local + push
+  // Supabase (ou mise en file si offline / erreur reseau)
+  async function persistDay(updated: ShootingDay) {
+    // 1) MAJ optimiste de l'etat React + cache localStorage
+    setActiveProject(p => {
+      if (!p) return p;
+      const next = { ...p, shootingDays: { ...p.shootingDays, [updated.date]: updated } };
+      ktCacheProject(next);
+      return next;
+    });
+    // 2) Tentative de push reseau
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      ktEnqueueDay({ id: updated.id, project_id: updated.project_id, date: updated.date, child_ids: updated.child_ids, sessions: updated.sessions });
+      return;
+    }
+    try {
+      const { error } = await supabase
+        .from("shooting_days")
+        .upsert(
+          { id: updated.id, project_id: updated.project_id, date: updated.date, child_ids: updated.child_ids, sessions: updated.sessions },
+          { onConflict: "id" }
+        );
+      if (error) throw error;
+    } catch {
+      ktEnqueueDay({ id: updated.id, project_id: updated.project_id, date: updated.date, child_ids: updated.child_ids, sessions: updated.sessions });
+    }
+  }
+
+  async function getOrCreateDay(dateStr: string): Promise<ShootingDay> {
+    return ensureLocalDay(dateStr);
+  }
+  async function updateDaySessions(dateStr: string, sessions: Record<string, Session>) {
+    const day = ensureLocalDay(dateStr);
+    await persistDay({ ...day, sessions });
+  }
   async function toggleChildOnDay(dateStr: string, childId: string) {
-    const day = await getOrCreateDay(dateStr); const ids = day.child_ids || [];
+    const day = ensureLocalDay(dateStr);
+    const ids = day.child_ids || [];
     const newIds = ids.includes(childId) ? ids.filter(i => i !== childId) : [...ids, childId];
-    await supabase.from("shooting_days").update({ child_ids: newIds }).eq("id", day.id); await refreshActive();
+    await persistDay({ ...day, child_ids: newIds });
   }
   async function addGroupToDay(dateStr: string, groupId: string) {
     const group = activeProject!.groups.find(g => g.id === groupId); if (!group) return;
-    const day = await getOrCreateDay(dateStr);
+    const day = ensureLocalDay(dateStr);
     const ids = [...new Set([...(day.child_ids || []), ...group.child_ids])];
-    await supabase.from("shooting_days").update({ child_ids: ids }).eq("id", day.id); await refreshActive();
+    await persistDay({ ...day, child_ids: ids });
   }
   async function removeGroupFromDay(dateStr: string, groupId: string) {
     const group = activeProject!.groups.find(g => g.id === groupId); if (!group) return;
     const day = activeProject!.shootingDays[dateStr]; if (!day) return;
     const ids = (day.child_ids || []).filter(id => !group.child_ids.includes(id));
-    await supabase.from("shooting_days").update({ child_ids: ids }).eq("id", day.id); await refreshActive();
+    await persistDay({ ...day, child_ids: ids });
   }
   async function startSessionsSequentially(dateStr: string, childIds: string[], timeISO?: string) {
-    const day = await getOrCreateDay(dateStr); const sessions = { ...(day.sessions || {}) }; let changed = false;
+    const day = ensureLocalDay(dateStr);
+    const sessions = { ...(day.sessions || {}) };
+    let changed = false;
     for (const childId of childIds) { if (!sessions[childId]?.start_time) { sessions[childId] = { start_time: timeISO || nowISO(), events: [], status: "working" }; changed = true; } }
     if (!changed) return;
-    await supabase.from("shooting_days").update({ sessions }).eq("id", day.id); await refreshActive();
+    await persistDay({ ...day, sessions });
   }
   async function startSession(dateStr: string, childId: string, timeISO?: string) { await startSessionsSequentially(dateStr, [childId], timeISO); }
   async function cancelSession(dateStr: string, childId: string) { const day = activeProject!.shootingDays[dateStr]; if (!day) return; const sessions = { ...(day.sessions || {}) }; delete sessions[childId]; await updateDaySessions(dateStr, sessions); }
@@ -1083,22 +1163,136 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
   return null;
 }
 
-// ─── OfflineBanner (autonome : gère lui-même l'état réseau) ───────────────────
+// ─── Cache local + file d'attente pour le mode hors-ligne ───────────────────
+// Tous les writes vue tournage sont d'abord appliques localement, caches en
+// localStorage, puis pousses vers Supabase. Si offline ou erreur reseau, la
+// modification est mise en file et rejouee au retour du reseau.
+
+const KT_CACHE_V = 1;
+const ktProjectKey = (id: string) => `kt_proj_v${KT_CACHE_V}_${id}`;
+const ktProjectListKey = (uid: string) => `kt_projs_v${KT_CACHE_V}_${uid}`;
+const KT_QUEUE_KEY = `kt_queue_v${KT_CACHE_V}`;
+
+type QueuedDay = {
+  id: string;
+  project_id: string;
+  date: string;
+  child_ids: string[];
+  sessions: Record<string, Session>;
+  queuedAt: number;
+};
+
+function ktCacheProject(p: Project) {
+  try { localStorage.setItem(ktProjectKey(p.id), JSON.stringify(p)); } catch {}
+}
+function ktLoadProject(id: string): Project | null {
+  try { const raw = localStorage.getItem(ktProjectKey(id)); return raw ? JSON.parse(raw) : null; } catch { return null; }
+}
+function ktCacheProjectList(uid: string, projects: Project[]) {
+  try { localStorage.setItem(ktProjectListKey(uid), JSON.stringify(projects)); } catch {}
+}
+function ktLoadProjectList(uid: string): Project[] {
+  try { const raw = localStorage.getItem(ktProjectListKey(uid)); return raw ? JSON.parse(raw) : []; } catch { return []; }
+}
+
+function ktGetQueue(): QueuedDay[] {
+  try { const raw = localStorage.getItem(KT_QUEUE_KEY); return raw ? JSON.parse(raw) : []; } catch { return []; }
+}
+function ktSetQueue(items: QueuedDay[]) {
+  try { localStorage.setItem(KT_QUEUE_KEY, JSON.stringify(items)); } catch {}
+}
+function ktEnqueueDay(day: Omit<QueuedDay, "queuedAt">) {
+  // Si une entree existe deja pour cet id, on la remplace (collapse)
+  const queue = ktGetQueue().filter(q => q.id !== day.id);
+  queue.push({ ...day, queuedAt: Date.now() });
+  ktSetQueue(queue);
+}
+function ktDequeueDay(id: string) {
+  ktSetQueue(ktGetQueue().filter(q => q.id !== id));
+}
+function ktQueueCount(): number {
+  return ktGetQueue().length;
+}
+
+async function ktReplayQueue(): Promise<number> {
+  if (typeof navigator !== "undefined" && !navigator.onLine) return ktQueueCount();
+  const queue = ktGetQueue();
+  for (const item of queue) {
+    try {
+      const { error } = await supabase
+        .from("shooting_days")
+        .upsert(
+          { id: item.id, project_id: item.project_id, date: item.date, child_ids: item.child_ids, sessions: item.sessions },
+          { onConflict: "id" }
+        );
+      if (!error) ktDequeueDay(item.id);
+    } catch { /* on relance plus tard */ }
+  }
+  return ktQueueCount();
+}
+
+// ─── OfflineBanner (autonome : gère lui-même l'état réseau + file d'attente) ─
 function OfflineBanner() {
   const [isOnline, setIsOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
+  const [pending, setPending] = useState(0);
+  const [syncing, setSyncing] = useState(false);
+  const [justSynced, setJustSynced] = useState(false);
+
   useEffect(() => {
-    const on = () => setIsOnline(true), off = () => setIsOnline(false);
+    setPending(ktQueueCount());
+    const on = async () => {
+      setIsOnline(true);
+      if (ktQueueCount() === 0) return;
+      setSyncing(true);
+      const remaining = await ktReplayQueue();
+      setPending(remaining);
+      setSyncing(false);
+      if (remaining === 0) {
+        setJustSynced(true);
+        setTimeout(() => setJustSynced(false), 3500);
+      }
+    };
+    const off = () => setIsOnline(false);
     window.addEventListener("online", on);
     window.addEventListener("offline", off);
-    return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
+    // Rafraichit le compteur toutes les 5 sec au cas ou une mutation l aurait
+    // change ailleurs dans l app
+    const tick = setInterval(() => setPending(ktQueueCount()), 5000);
+    return () => {
+      window.removeEventListener("online", on);
+      window.removeEventListener("offline", off);
+      clearInterval(tick);
+    };
   }, []);
-  if (isOnline) return null;
-  return (
-    <div className="fixed top-0 left-0 right-0 z-50 bg-amber-900/90 border-b border-amber-700 px-4 py-2 flex items-center justify-center gap-2 text-amber-200 text-xs backdrop-blur">
-      <span>📡</span>
-      <span>Mode hors-ligne — les modifications reprendront dès le retour du réseau.</span>
-    </div>
-  );
+
+  // Bandeau hors-ligne
+  if (!isOnline) {
+    return (
+      <div className="fixed top-0 left-0 right-0 z-50 bg-amber-900/90 border-b border-amber-700 px-4 py-2 flex items-center justify-center gap-2 text-amber-200 text-xs backdrop-blur">
+        <span>📡</span>
+        <span>Mode hors-ligne {pending > 0 && <span className="font-bold">— {pending} action(s) en attente de synchronisation</span>}</span>
+      </div>
+    );
+  }
+  // Bandeau de synchro en cours
+  if (syncing) {
+    return (
+      <div className="fixed top-0 left-0 right-0 z-50 bg-blue-900/90 border-b border-blue-700 px-4 py-2 flex items-center justify-center gap-2 text-blue-200 text-xs backdrop-blur">
+        <span className="animate-spin">↻</span>
+        <span>Synchronisation en cours…</span>
+      </div>
+    );
+  }
+  // Petit toast de confirmation
+  if (justSynced) {
+    return (
+      <div className="fixed top-0 left-0 right-0 z-50 bg-emerald-900/90 border-b border-emerald-700 px-4 py-2 flex items-center justify-center gap-2 text-emerald-200 text-xs backdrop-blur">
+        <span>✓</span>
+        <span>Modifications synchronisées</span>
+      </div>
+    );
+  }
+  return null;
 }
 
 // ─── ShareModal ───────────────────────────────────────────────────────────────
