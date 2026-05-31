@@ -1718,9 +1718,9 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
   function downloadTemplate() {
     // Une ligne d'exemple bien remplie, une ligne minimale, pour montrer ce qui est optionnel.
     const csv =
-      "Prénom;Nom;Date de naissance (JJ/MM/AAAA);Statut (role/silhouette/figurant);Début vacances (JJ/MM/AAAA);Fin vacances (JJ/MM/AAAA);Suivi scolaire (oui/non);Dérogation date (JJ/MM/AAAA);Dérogation heure fin (HH:MM)\n" +
-      "Léa;Martin;15/03/2015;role;01/07/2025;31/08/2025;oui;21/04/2025;23:00\n" +
-      "Tom;Dupont;08/11/2012;silhouette;;;non;;\n";
+      "Prénom;Nom;Date de naissance (JJ/MM/AAAA);Statut (role/silhouette/figurant);Début vacances (JJ/MM/AAAA);Fin vacances (JJ/MM/AAAA);Suivi scolaire (oui/non)\n" +
+      "Léa;Martin;15/03/2015;role;01/07/2025;31/08/2025;oui\n" +
+      "Tom;Dupont;08/11/2012;silhouette;;;non\n";
     const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "modele_enfants_kidstime.csv"; a.click(); URL.revokeObjectURL(url);
   }
