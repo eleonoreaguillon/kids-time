@@ -916,11 +916,24 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
   }
 
   async function createProject(name: string) {
-    const { data } = await supabase.from("projects").insert({ user_id: userId, name, rules: DEFAULT_RULES }).select().single();
-    if (data) { await loadProjects(); openProject(data.id); }
+    const id = newId();
+    const created_at = new Date().toISOString();
+    const newProj: Project = {
+      id, user_id: userId, name, rules: DEFAULT_RULES, created_at,
+      children: [], groups: [], shootingDays: {},
+    } as Project;
+    // Cache + state immediats
+    ktCacheProject(newProj);
+    setProjectsAndCache(list => [...list, newProj]);
+    await persistProjectUpsert({ id, user_id: userId, name, rules: DEFAULT_RULES });
+    openProject(id);
   }
 
-  async function deleteProject(id: string) { await supabase.from("projects").delete().eq("id", id); loadProjects(); }
+  async function deleteProject(id: string) {
+    setProjectsAndCache(list => list.filter(p => p.id !== id));
+    try { localStorage.removeItem(ktProjectKey(id)); } catch {}
+    await persistProjectDelete(id);
+  }
 
   async function generateShareToken(projectId: string): Promise<string> {
     const token = crypto.randomUUID();
@@ -942,55 +955,179 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
   }
 
   async function addChild(child: { firstName: string; lastName: string; dob: string; vacationPeriods: VacationPeriod[]; role: ChildRole | null; derogations?: Derogation[]; schoolTracking?: boolean }) {
-    const { error } = await supabase.from("children").insert({
-      project_id: activeProject!.id, first_name: child.firstName.trim(), last_name: child.lastName.trim(),
-      dob: child.dob, vacation_periods: child.vacationPeriods || [], child_role: child.role ?? null,
-      derogations: child.derogations || [], school_tracking: child.schoolTracking ?? false,
-    });
-    if (error) { console.error("addChild error:", error); return; }
-    await refreshActive();
+    if (!activeProject) return;
+    const c: Child = {
+      id: newId(),
+      project_id: activeProject.id,
+      first_name: child.firstName.trim(),
+      last_name: child.lastName.trim(),
+      dob: child.dob,
+      vacation_periods: child.vacationPeriods || [],
+      role: child.role ?? undefined,
+      derogations: child.derogations || [],
+      school_tracking: child.schoolTracking ?? false,
+      archived: false,
+    };
+    setActiveAndCache(p => ({ ...p, children: [...p.children, c] }));
+    await persistChild(c);
   }
 
   async function addChildren(children: { firstName: string; lastName: string; dob: string; vacationPeriods: VacationPeriod[]; role: ChildRole | null; derogations?: Derogation[]; schoolTracking?: boolean }[]) {
-    if (children.length === 0) return;
-    const rows = children.map(c => ({ project_id: activeProject!.id, first_name: c.firstName, last_name: c.lastName, dob: c.dob, vacation_periods: c.vacationPeriods || [], child_role: c.role ?? null, derogations: c.derogations || [], school_tracking: c.schoolTracking ?? false }));
-    const { error } = await supabase.from("children").insert(rows);
-    if (error) { console.error("Import error:", error); throw error; }
-    await refreshActive();
+    if (children.length === 0 || !activeProject) return;
+    const created: Child[] = children.map(c => ({
+      id: newId(),
+      project_id: activeProject.id,
+      first_name: c.firstName.trim(),
+      last_name: c.lastName.trim(),
+      dob: c.dob,
+      vacation_periods: c.vacationPeriods || [],
+      role: c.role ?? undefined,
+      derogations: c.derogations || [],
+      school_tracking: c.schoolTracking ?? false,
+      archived: false,
+    }));
+    setActiveAndCache(p => ({ ...p, children: [...p.children, ...created] }));
+    for (const c of created) await persistChild(c);
   }
 
   async function updateChild(id: string, data: { firstName: string; lastName: string; dob: string; vacationPeriods: VacationPeriod[]; role: ChildRole | null; derogations?: Derogation[]; schoolTracking?: boolean }) {
-    const { error } = await supabase.from("children").update({ first_name: data.firstName.trim(), last_name: data.lastName.trim(), dob: data.dob, vacation_periods: data.vacationPeriods || [], child_role: data.role ?? null, derogations: data.derogations || [], school_tracking: data.schoolTracking ?? false }).eq("id", id);
-    if (error) { console.error("updateChild error:", error); return; }
-    await refreshActive();
+    let updated: Child | null = null;
+    setActiveAndCache(p => {
+      const children = p.children.map(c => {
+        if (c.id !== id) return c;
+        updated = {
+          ...c,
+          first_name: data.firstName.trim(),
+          last_name: data.lastName.trim(),
+          dob: data.dob,
+          vacation_periods: data.vacationPeriods || [],
+          role: data.role ?? undefined,
+          derogations: data.derogations || [],
+          school_tracking: data.schoolTracking ?? false,
+        };
+        return updated;
+      });
+      return { ...p, children };
+    });
+    if (updated) await persistChild(updated);
   }
 
-  // Fix #3: archive child
   async function archiveChild(id: string, archived: boolean) {
-    await supabase.from("children").update({ archived }).eq("id", id);
-    await refreshActive();
+    let updated: Child | null = null;
+    setActiveAndCache(p => {
+      const children = p.children.map(c => {
+        if (c.id !== id) return c;
+        updated = { ...c, archived };
+        return updated;
+      });
+      return { ...p, children };
+    });
+    if (updated) await persistChild(updated);
   }
 
-  async function removeChild(id: string) { await supabase.from("children").delete().eq("id", id); await refreshActive(); }
-  async function addGroup(name: string) { await supabase.from("groups").insert({ project_id: activeProject!.id, name, child_ids: [] }); await refreshActive(); }
-  async function updateGroup(id: string, data: Partial<Group>) { await supabase.from("groups").update(data).eq("id", id); await refreshActive(); }
-  async function removeGroup(id: string) { await supabase.from("groups").delete().eq("id", id); await refreshActive(); }
+  async function removeChild(id: string) {
+    setActiveAndCache(p => ({ ...p, children: p.children.filter(c => c.id !== id) }));
+    await persistChildDelete(id);
+  }
+
+  async function addGroup(name: string) {
+    if (!activeProject) return;
+    const g: Group = { id: newId(), project_id: activeProject.id, name, child_ids: [] };
+    setActiveAndCache(p => ({ ...p, groups: [...p.groups, g] }));
+    await persistGroup(g);
+  }
+
+  async function updateGroup(id: string, data: Partial<Group>) {
+    let updated: Group | null = null;
+    setActiveAndCache(p => {
+      const groups = p.groups.map(g => {
+        if (g.id !== id) return g;
+        updated = { ...g, ...data };
+        return updated;
+      });
+      return { ...p, groups };
+    });
+    if (updated) await persistGroup(updated);
+  }
+
+  async function removeGroup(id: string) {
+    setActiveAndCache(p => ({ ...p, groups: p.groups.filter(g => g.id !== id) }));
+    await persistGroupDelete(id);
+  }
 
   async function updateRules(fn: (r: Rules) => Rules) {
     const r = fn(activeProject!.rules);
-    await supabase.from("projects").update({ rules: r }).eq("id", activeProject!.id);
-    setActiveProject(p => p ? { ...p, rules: r } : p);
+    setActiveAndCache(p => ({ ...p, rules: r }));
+    await persistProjectPatch(activeProject!.id, { rules: r });
   }
 
   async function renameProject(name: string) {
     const clean = name.trim();
     if (!clean || !activeProject) return;
-    await supabase.from("projects").update({ name: clean }).eq("id", activeProject.id);
-    setActiveProject(p => p ? { ...p, name: clean } : p);
-    await loadProjects();
+    setActiveAndCache(p => ({ ...p, name: clean }));
+    setProjectsAndCache(list => list.map(p => p.id === activeProject.id ? { ...p, name: clean } : p));
+    await persistProjectPatch(activeProject.id, { name: clean });
   }
 
   // ─── Helpers offline ────────────────────────────────────────────────────
+  function newId(): string {
+    return typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+  }
+  // Maj atomique de activeProject + cache localStorage
+  function setActiveAndCache(updater: (p: Project) => Project) {
+    setActiveProject(p => { if (!p) return p; const next = updater(p); ktCacheProject(next); return next; });
+  }
+  // Maj atomique de la liste des projets + cache localStorage
+  function setProjectsAndCache(updater: (list: Project[]) => Project[]) {
+    setProjects(prev => { const next = updater(prev); ktCacheProjectList(userId, next); return next; });
+  }
+
+  async function tryPushOrQueue(op: QueueOp, push: () => any) {
+    if (typeof navigator !== "undefined" && !navigator.onLine) { ktEnqueue(op); return; }
+    try {
+      const res = await push();
+      if (res && res.error) throw res.error;
+    } catch { ktEnqueue(op); }
+  }
+
+  function childToPayload(c: Child) {
+    return {
+      id: c.id,
+      project_id: c.project_id,
+      first_name: (c.first_name || "").trim(),
+      last_name: (c.last_name || "").trim(),
+      dob: c.dob,
+      vacation_periods: c.vacation_periods || [],
+      child_role: (c.role ?? null) as string | null,
+      derogations: c.derogations || [],
+      school_tracking: !!c.school_tracking,
+      archived: !!c.archived,
+    };
+  }
+  async function persistChild(c: Child) {
+    const data = childToPayload(c);
+    await tryPushOrQueue({ kind: "child_upsert", data }, () => supabase.from("children").upsert(data, { onConflict: "id" }));
+  }
+  async function persistChildDelete(id: string) {
+    await tryPushOrQueue({ kind: "child_delete", data: { id } }, () => supabase.from("children").delete().eq("id", id));
+  }
+  async function persistGroup(g: Group) {
+    const data = { id: g.id, project_id: g.project_id, name: g.name, child_ids: g.child_ids || [] };
+    await tryPushOrQueue({ kind: "group_upsert", data }, () => supabase.from("groups").upsert(data, { onConflict: "id" }));
+  }
+  async function persistGroupDelete(id: string) {
+    await tryPushOrQueue({ kind: "group_delete", data: { id } }, () => supabase.from("groups").delete().eq("id", id));
+  }
+  async function persistProjectPatch(id: string, patch: Record<string, any>) {
+    await tryPushOrQueue({ kind: "project_patch", data: { id, patch } }, () => supabase.from("projects").update(patch).eq("id", id));
+  }
+  async function persistProjectUpsert(p: { id: string; user_id: string; name: string; rules: Rules }) {
+    await tryPushOrQueue({ kind: "project_upsert", data: p }, () => supabase.from("projects").upsert(p, { onConflict: "id" }));
+  }
+  async function persistProjectDelete(id: string) {
+    await tryPushOrQueue({ kind: "project_delete", data: { id } }, () => supabase.from("projects").delete().eq("id", id));
+  }
+
   // Cree localement un jour si necessaire (UUID cote client pour autoriser le
   // mode hors-ligne)
   function ensureLocalDay(dateStr: string): ShootingDay {
@@ -1015,20 +1152,16 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
       return next;
     });
     // 2) Tentative de push reseau
+    const data = { id: updated.id, project_id: updated.project_id, date: updated.date, child_ids: updated.child_ids, sessions: updated.sessions };
     if (typeof navigator !== "undefined" && !navigator.onLine) {
-      ktEnqueueDay({ id: updated.id, project_id: updated.project_id, date: updated.date, child_ids: updated.child_ids, sessions: updated.sessions });
+      ktEnqueue({ kind: "day_upsert", data });
       return;
     }
     try {
-      const { error } = await supabase
-        .from("shooting_days")
-        .upsert(
-          { id: updated.id, project_id: updated.project_id, date: updated.date, child_ids: updated.child_ids, sessions: updated.sessions },
-          { onConflict: "id" }
-        );
+      const { error } = await supabase.from("shooting_days").upsert(data, { onConflict: "id" });
       if (error) throw error;
     } catch {
-      ktEnqueueDay({ id: updated.id, project_id: updated.project_id, date: updated.date, child_ids: updated.child_ids, sessions: updated.sessions });
+      ktEnqueue({ kind: "day_upsert", data });
     }
   }
 
@@ -1173,6 +1306,18 @@ const ktProjectKey = (id: string) => `kt_proj_v${KT_CACHE_V}_${id}`;
 const ktProjectListKey = (uid: string) => `kt_projs_v${KT_CACHE_V}_${uid}`;
 const KT_QUEUE_KEY = `kt_queue_v${KT_CACHE_V}`;
 
+// File d'attente polymorphe : couvre tout le palier 3
+type QueueOp =
+  | { kind: "day_upsert";     data: { id: string; project_id: string; date: string; child_ids: string[]; sessions: Record<string, Session> } }
+  | { kind: "child_upsert";   data: { id: string; project_id: string; first_name: string; last_name: string; dob: string; vacation_periods: any[]; child_role: string | null; derogations: any[]; school_tracking: boolean; archived: boolean } }
+  | { kind: "child_delete";   data: { id: string } }
+  | { kind: "group_upsert";   data: { id: string; project_id: string; name: string; child_ids: string[] } }
+  | { kind: "group_delete";   data: { id: string } }
+  | { kind: "project_upsert"; data: { id: string; user_id: string; name: string; rules: Rules } }
+  | { kind: "project_patch";  data: { id: string; patch: Record<string, any> } }
+  | { kind: "project_delete"; data: { id: string } };
+
+// Type legacy garde pour compat localStorage (anciens utilisateurs hors-ligne)
 type QueuedDay = {
   id: string;
   project_id: string;
@@ -1195,20 +1340,48 @@ function ktLoadProjectList(uid: string): Project[] {
   try { const raw = localStorage.getItem(ktProjectListKey(uid)); return raw ? JSON.parse(raw) : []; } catch { return []; }
 }
 
-function ktGetQueue(): QueuedDay[] {
-  try { const raw = localStorage.getItem(KT_QUEUE_KEY); return raw ? JSON.parse(raw) : []; } catch { return []; }
+function ktGetQueue(): QueueOp[] {
+  try {
+    const raw = localStorage.getItem(KT_QUEUE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    // Migration : l ancienne version stockait un tableau de jours
+    if (parsed.length && parsed[0] && !parsed[0].kind && parsed[0].id && parsed[0].sessions) {
+      const migrated: QueueOp[] = parsed.map((d: QueuedDay) => ({
+        kind: "day_upsert",
+        data: { id: d.id, project_id: d.project_id, date: d.date, child_ids: d.child_ids, sessions: d.sessions },
+      }));
+      ktSetQueue(migrated);
+      return migrated;
+    }
+    return parsed as QueueOp[];
+  } catch { return []; }
 }
-function ktSetQueue(items: QueuedDay[]) {
+function ktSetQueue(items: QueueOp[]) {
   try { localStorage.setItem(KT_QUEUE_KEY, JSON.stringify(items)); } catch {}
 }
-function ktEnqueueDay(day: Omit<QueuedDay, "queuedAt">) {
-  // Si une entree existe deja pour cet id, on la remplace (collapse)
-  const queue = ktGetQueue().filter(q => q.id !== day.id);
-  queue.push({ ...day, queuedAt: Date.now() });
+function ktEnqueue(op: QueueOp) {
+  let queue = ktGetQueue();
+  // Collapse les upserts repetes sur le meme id : la derniere version gagne
+  if (op.kind === "day_upsert" || op.kind === "child_upsert" || op.kind === "group_upsert" || op.kind === "project_upsert") {
+    queue = queue.filter(q => !(q.kind === op.kind && (q.data as any).id === (op.data as any).id));
+  }
+  // Pour project_patch on fusionne les patches successifs
+  if (op.kind === "project_patch") {
+    const idx = queue.findIndex(q => q.kind === "project_patch" && q.data.id === op.data.id);
+    if (idx >= 0) {
+      const existing = queue[idx] as Extract<QueueOp, { kind: "project_patch" }>;
+      existing.data.patch = { ...existing.data.patch, ...op.data.patch };
+      ktSetQueue(queue);
+      return;
+    }
+  }
+  // Pour les deletes : on supprime aussi tout upsert anterieur sur le meme id
+  if (op.kind === "child_delete") queue = queue.filter(q => !(q.kind === "child_upsert" && q.data.id === op.data.id));
+  if (op.kind === "group_delete") queue = queue.filter(q => !(q.kind === "group_upsert" && q.data.id === op.data.id));
+  if (op.kind === "project_delete") queue = queue.filter(q => !((q.kind === "project_upsert" || q.kind === "project_patch") && q.data.id === op.data.id));
+  queue.push(op);
   ktSetQueue(queue);
-}
-function ktDequeueDay(id: string) {
-  ktSetQueue(ktGetQueue().filter(q => q.id !== id));
 }
 function ktQueueCount(): number {
   return ktGetQueue().length;
@@ -1217,18 +1390,32 @@ function ktQueueCount(): number {
 async function ktReplayQueue(): Promise<number> {
   if (typeof navigator !== "undefined" && !navigator.onLine) return ktQueueCount();
   const queue = ktGetQueue();
-  for (const item of queue) {
+  const remaining: QueueOp[] = [];
+  for (const op of queue) {
     try {
-      const { error } = await supabase
-        .from("shooting_days")
-        .upsert(
-          { id: item.id, project_id: item.project_id, date: item.date, child_ids: item.child_ids, sessions: item.sessions },
-          { onConflict: "id" }
-        );
-      if (!error) ktDequeueDay(item.id);
-    } catch { /* on relance plus tard */ }
+      let error: any = null;
+      if (op.kind === "day_upsert") {
+        ({ error } = await supabase.from("shooting_days").upsert(op.data, { onConflict: "id" }));
+      } else if (op.kind === "child_upsert") {
+        ({ error } = await supabase.from("children").upsert(op.data, { onConflict: "id" }));
+      } else if (op.kind === "child_delete") {
+        ({ error } = await supabase.from("children").delete().eq("id", op.data.id));
+      } else if (op.kind === "group_upsert") {
+        ({ error } = await supabase.from("groups").upsert(op.data, { onConflict: "id" }));
+      } else if (op.kind === "group_delete") {
+        ({ error } = await supabase.from("groups").delete().eq("id", op.data.id));
+      } else if (op.kind === "project_upsert") {
+        ({ error } = await supabase.from("projects").upsert(op.data, { onConflict: "id" }));
+      } else if (op.kind === "project_patch") {
+        ({ error } = await supabase.from("projects").update(op.data.patch).eq("id", op.data.id));
+      } else if (op.kind === "project_delete") {
+        ({ error } = await supabase.from("projects").delete().eq("id", op.data.id));
+      }
+      if (error) remaining.push(op);
+    } catch { remaining.push(op); }
   }
-  return ktQueueCount();
+  ktSetQueue(remaining);
+  return remaining.length;
 }
 
 // ─── OfflineBanner (autonome : gère lui-même l'état réseau + file d'attente) ─
