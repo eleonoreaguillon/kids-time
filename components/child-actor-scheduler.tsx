@@ -905,10 +905,9 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     await refreshActive();
   }
 
-  async function addChild(child: { fullName: string; dob: string; vacationPeriods: VacationPeriod[]; role: ChildRole | null; derogations?: Derogation[]; schoolTracking?: boolean }) {
-    const { firstName, lastName } = splitFullName(child.fullName);
+  async function addChild(child: { firstName: string; lastName: string; dob: string; vacationPeriods: VacationPeriod[]; role: ChildRole | null; derogations?: Derogation[]; schoolTracking?: boolean }) {
     const { error } = await supabase.from("children").insert({
-      project_id: activeProject!.id, first_name: firstName, last_name: lastName,
+      project_id: activeProject!.id, first_name: child.firstName.trim(), last_name: child.lastName.trim(),
       dob: child.dob, vacation_periods: child.vacationPeriods || [], child_role: child.role ?? null,
       derogations: child.derogations || [], school_tracking: child.schoolTracking ?? false,
     });
@@ -924,9 +923,8 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     await refreshActive();
   }
 
-  async function updateChild(id: string, data: { fullName: string; dob: string; vacationPeriods: VacationPeriod[]; role: ChildRole | null; derogations?: Derogation[]; schoolTracking?: boolean }) {
-    const { firstName, lastName } = splitFullName(data.fullName);
-    const { error } = await supabase.from("children").update({ first_name: firstName, last_name: lastName, dob: data.dob, vacation_periods: data.vacationPeriods || [], child_role: data.role ?? null, derogations: data.derogations || [], school_tracking: data.schoolTracking ?? false }).eq("id", id);
+  async function updateChild(id: string, data: { firstName: string; lastName: string; dob: string; vacationPeriods: VacationPeriod[]; role: ChildRole | null; derogations?: Derogation[]; schoolTracking?: boolean }) {
+    const { error } = await supabase.from("children").update({ first_name: data.firstName.trim(), last_name: data.lastName.trim(), dob: data.dob, vacation_periods: data.vacationPeriods || [], child_role: data.role ?? null, derogations: data.derogations || [], school_tracking: data.schoolTracking ?? false }).eq("id", id);
     if (error) { console.error("updateChild error:", error); return; }
     await refreshActive();
   }
@@ -2021,7 +2019,8 @@ function SettingsTab({ rules, onUpdateRules, projectName, onRename, onDelete }: 
 }
 
 function ChildFormModal({ child, onSave, onClose }: { child: Child | null; onSave: (d: any) => void; onClose: () => void }) {
-  const [fullName, setFullName] = useState(child ? `${child.first_name} ${child.last_name}`.trim() : "");
+  const [firstName, setFirstName] = useState(child?.first_name ?? "");
+  const [lastName, setLastName] = useState(child?.last_name ?? "");
   const [dob, setDob] = useState(child?.dob || "");
   const [vacationPeriods, setVacationPeriods] = useState<VacationPeriod[]>(child?.vacation_periods || []);
   const [role, setRole] = useState<ChildRole | null>(child?.role || null);
@@ -2032,15 +2031,20 @@ function ChildFormModal({ child, onSave, onClose }: { child: Child | null; onSav
   const [error, setError] = useState("");
 
   function handleSave() {
-    if (!fullName.trim()) { setError("Le prénom et nom sont obligatoires."); return; }
+    const fn = firstName.trim(), ln = lastName.trim();
+    if (!fn || !ln) { setError("Le prénom et le nom sont obligatoires."); return; }
     if (!dob) { setError("La date de naissance est obligatoire."); return; }
-    setError(""); onSave({ fullName: fullName.trim(), dob, vacationPeriods, role, derogations, schoolTracking });
+    setError("");
+    onSave({ firstName: fn, lastName: ln, dob, vacationPeriods, role, derogations, schoolTracking });
   }
 
   return (
     <Modal title={child ? "Modifier l'enfant" : "Ajouter un enfant"} onClose={onClose}>
       <div className="space-y-3">
-        <TextInput label="Prénom Nom" required value={fullName} onChange={e => setFullName(e.target.value)} placeholder="Ex: Léa Martin" />
+        <div className="grid grid-cols-2 gap-2">
+          <TextInput label="Prénom" required value={firstName} onChange={e => setFirstName(e.target.value)} placeholder="Léa" />
+          <TextInput label="Nom" required value={lastName} onChange={e => setLastName(e.target.value)} placeholder="Martin" />
+        </div>
         <TextInput label="Date de naissance" required type="date" value={dob} onChange={e => setDob(e.target.value)} />
         {dob && (
           <div className={`border rounded-lg px-3 py-2 text-sm ${isMinor(dob) ? "bg-blue-900/30 border-blue-700/60 text-blue-300" : "bg-amber-900/30 border-amber-700/60 text-amber-200"}`}>
