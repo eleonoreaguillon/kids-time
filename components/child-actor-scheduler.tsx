@@ -915,9 +915,9 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     await refreshActive();
   }
 
-  async function addChildren(children: { firstName: string; lastName: string; dob: string; vacationPeriods: VacationPeriod[]; role: ChildRole | null; schoolTracking?: boolean }[]) {
+  async function addChildren(children: { firstName: string; lastName: string; dob: string; vacationPeriods: VacationPeriod[]; role: ChildRole | null; derogations?: Derogation[]; schoolTracking?: boolean }[]) {
     if (children.length === 0) return;
-    const rows = children.map(c => ({ project_id: activeProject!.id, first_name: c.firstName, last_name: c.lastName, dob: c.dob, vacation_periods: c.vacationPeriods || [], child_role: c.role ?? null, school_tracking: c.schoolTracking ?? false }));
+    const rows = children.map(c => ({ project_id: activeProject!.id, first_name: c.firstName, last_name: c.lastName, dob: c.dob, vacation_periods: c.vacationPeriods || [], child_role: c.role ?? null, derogations: c.derogations || [], school_tracking: c.schoolTracking ?? false }));
     const { error } = await supabase.from("children").insert(rows);
     if (error) { console.error("Import error:", error); throw error; }
     await refreshActive();
@@ -1716,7 +1716,11 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
   const displayChildren = sortByRoleThenAlpha(showArchived ? archivedChildren : (roleTab === "all" ? activeChildren : activeChildren.filter(c => c.role === roleTab)));
 
   function downloadTemplate() {
-    const csv = "Nom Prénom;Statut (role/silhouette/figurant);Date de naissance (JJ/MM/AAAA);Début vacances (JJ/MM/AAAA);Fin vacances (JJ/MM/AAAA);Suivi scolaire (oui/non)\nMartin Léa;role;15/03/2015;01/07/2025;31/08/2025;oui\n";
+    // Une ligne d'exemple bien remplie, une ligne minimale, pour montrer ce qui est optionnel.
+    const csv =
+      "Prénom;Nom;Date de naissance (JJ/MM/AAAA);Statut (role/silhouette/figurant);Début vacances (JJ/MM/AAAA);Fin vacances (JJ/MM/AAAA);Suivi scolaire (oui/non);Dérogation date (JJ/MM/AAAA);Dérogation heure fin (HH:MM)\n" +
+      "Léa;Martin;15/03/2015;role;01/07/2025;31/08/2025;oui;21/04/2025;23:00\n" +
+      "Tom;Dupont;08/11/2012;silhouette;;;non;;\n";
     const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "modele_enfants_kidstime.csv"; a.click(); URL.revokeObjectURL(url);
   }
@@ -1747,18 +1751,48 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
       const ve = guessColumn(headers, ["fin vacances", "vacances fin", "end vacances", "fin vac"]);
       const statCol = guessColumn(headers, ["statut", "status", "type de role", "type"]);
       const scolCol = guessColumn(headers, ["suivi scolaire", "scolaire", "school tracking", "school", "suivi"]);
+      const derogDateCol = guessColumn(headers, ["derogation date", "dérogation date", "date derogation", "date dérogation", "derog date"]);
+      const derogTimeCol = guessColumn(headers, ["derogation heure fin", "dérogation heure fin", "derogation heure", "dérogation heure", "heure derogation", "heure dérogation", "derog heure", "derog heure fin"]);
       const parsed = rows.map(r => {
-        let fullName = "";
-        if (fullCol && String(r[fullCol] || "").trim()) fullName = String(r[fullCol]).trim();
-        else if (fnCol && lnCol) { const fn = String(r[fnCol] || "").trim(); const ln = String(r[lnCol] || "").trim(); fullName = [fn, ln].filter(Boolean).join(" "); }
-        else if (fnCol) fullName = String(r[fnCol] || "").trim();
-        else if (lnCol) fullName = String(r[lnCol] || "").trim();
-        else if (nomCol) fullName = String(r[nomCol] || "").trim();
-        else { const firstVal = Object.values(r).find(v => String(v || "").trim() !== ""); fullName = String(firstVal || "").trim(); }
-        const { firstName, lastName } = splitFullName(fullName);
+        // Nom / prenom : on prefere les colonnes separees si presentes
+        let firstName = "", lastName = "";
+        if (fnCol && lnCol) {
+          firstName = String(r[fnCol] || "").trim();
+          lastName = String(r[lnCol] || "").trim();
+        } else if (fullCol && String(r[fullCol] || "").trim()) {
+          ({ firstName, lastName } = splitFullName(String(r[fullCol]).trim()));
+        } else if (fnCol) {
+          firstName = String(r[fnCol] || "").trim();
+        } else if (lnCol) {
+          lastName = String(r[lnCol] || "").trim();
+        } else if (nomCol) {
+          ({ firstName, lastName } = splitFullName(String(r[nomCol] || "").trim()));
+        } else {
+          const firstVal = Object.values(r).find(v => String(v || "").trim() !== "");
+          ({ firstName, lastName } = splitFullName(String(firstVal || "").trim()));
+        }
+
         const role: ChildRole | null = statCol ? detectRole(String(r[statCol] || "")) : null;
         const schoolTracking = scolCol ? /^(oui|yes|true|1|x|o)$/i.test(String(r[scolCol] ?? "").trim()) : false;
-        return { firstName, lastName, dob: dobCol ? parseExcelDate(r[dobCol]) : "", vacationPeriods: (vs && ve && r[vs] && r[ve]) ? [{ start: parseExcelDate(r[vs]), end: parseExcelDate(r[ve]) }] : [], role, schoolTracking };
+
+        // Derogation : si on a une date ET une heure valides
+        const derogations: Derogation[] = [];
+        if (derogDateCol && derogTimeCol) {
+          const dDate = parseExcelDate(r[derogDateCol]);
+          const dTime = String(r[derogTimeCol] ?? "").trim();
+          if (dDate && /^\d{1,2}:\d{2}$/.test(dTime)) {
+            derogations.push({ date: dDate, end_time: dTime.padStart(5, "0") });
+          }
+        }
+
+        return {
+          firstName, lastName,
+          dob: dobCol ? parseExcelDate(r[dobCol]) : "",
+          vacationPeriods: (vs && ve && r[vs] && r[ve]) ? [{ start: parseExcelDate(r[vs]), end: parseExcelDate(r[ve]) }] : [],
+          role,
+          schoolTracking,
+          derogations,
+        };
       }).filter(c => c.firstName && c.dob);
       if (parsed.length === 0) { setImportMsg("❌ Aucun enfant valide trouvé."); return; }
       setImportPreview(parsed); setShowPreview(true);
@@ -1792,8 +1826,17 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
         {importMsg && <div className={`text-xs mb-2 ${importMsg.startsWith("✅") ? "text-emerald-400" : "text-red-400"}`}>{importMsg}</div>}
         {showPreview && importPreview.length > 0 && (
           <div className="mt-2 bg-slate-800/60 rounded-xl p-3">
-            <div className="space-y-1 max-h-40 overflow-y-auto mb-2">
-              {importPreview.map((c, i) => <div key={i} className="text-xs flex gap-2 items-center flex-wrap"><span className="text-white font-semibold">{c.firstName} {c.lastName}</span><span className="text-slate-500">{c.dob}</span>{c.role && <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${ROLE_COLORS[c.role as ChildRole]}`}>{ROLE_LABELS[c.role as ChildRole]}</span>}</div>)}
+            <div className="space-y-1.5 max-h-56 overflow-y-auto mb-2">
+              {importPreview.map((c, i) => (
+                <div key={i} className="text-xs flex gap-1.5 items-center flex-wrap">
+                  <span className="text-white font-semibold">{c.firstName} {c.lastName}</span>
+                  <span className="text-slate-500">{c.dob}</span>
+                  {c.role && <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${ROLE_COLORS[c.role as ChildRole]}`}>{ROLE_LABELS[c.role as ChildRole]}</span>}
+                  {c.schoolTracking && <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-indigo-700 bg-indigo-900/40 text-indigo-300">📚 Suivi sco.</span>}
+                  {c.vacationPeriods?.length > 0 && <span className="text-[10px] text-amber-400">🌴 {c.vacationPeriods.length}</span>}
+                  {c.derogations?.length > 0 && <span className="text-[10px] text-purple-400">⏱ {c.derogations.length} dérog.</span>}
+                </div>
+              ))}
             </div>
             <div className="flex gap-2">
               <button onClick={() => { setShowPreview(false); setImportMsg(""); }} className="text-xs text-slate-400">Annuler</button>
