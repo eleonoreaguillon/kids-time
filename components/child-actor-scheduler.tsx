@@ -533,9 +533,11 @@ export function exportProjectGlobal(project: Project) {
 }
 
 // Fix #6: PDF global recap — one section per child, dates as columns (format DRIEETS)
-export function exportProjectGlobalPDF(project: Project) {
+// Si selectedIds est fourni, seuls ces enfants sont inclus dans le PDF.
+export function exportProjectGlobalPDF(project: Project, selectedIds?: string[]) {
   const sortedDates = Object.keys(project.shootingDays).sort();
   if (sortedDates.length === 0) { alert("Aucune journée de tournage dans ce projet."); return; }
+  const filterSet = selectedIds && selectedIds.length > 0 ? new Set(selectedIds) : null;
 
   const fmtHHMM = (min: number | null | undefined): string => {
     if (!min || min <= 0) return "";
@@ -576,7 +578,7 @@ export function exportProjectGlobalPDF(project: Project) {
   <h1>KidsTime — Récapitulatif global</h1>
   <h2>${project.name} · Généré le ${new Date().toLocaleDateString("fr-FR")}</h2>`;
 
-  for (const child of sortByRoleThenAlpha(project.children.filter(c => !c.archived))) {
+  for (const child of sortByRoleThenAlpha(project.children.filter(c => !c.archived && (!filterSet || filterSet.has(c.id))))) {
     type DayData = { inDay: boolean; session?: Session; vacation: boolean; maxWork: number; maxAmp: number; stats: SessionStats | null };
     const dd: Record<string, DayData> = {};
     for (const dateStr of sortedDates) {
@@ -1054,7 +1056,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     onArchiveChild={archiveChild}
     onAddGroup={addGroup} onUpdateGroup={updateGroup} onRemoveGroup={removeGroup} onUpdateRules={updateRules}
     onOpenDay={date => { setActiveDate(date); setView("shooting"); }}
-    onExportProjectPDF={() => exportProjectGlobalPDF(activeProject)}
+    onExportProjectPDF={(ids?: string[]) => exportProjectGlobalPDF(activeProject, ids)}
     onExportChildDays={child => exportChildAllDays(activeProject, child)}
     onRename={renameProject}
     onDelete={() => { deleteProject(activeProject.id); setView("home"); loadProjects(); }}
@@ -1503,7 +1505,7 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
   onArchiveChild: (id: string, archived: boolean) => void;
   onAddGroup: (name: string) => void; onUpdateGroup: (id: string, d: any) => void; onRemoveGroup: (id: string) => void;
   onUpdateRules: (fn: (r: Rules) => Rules) => void; onOpenDay: (date: string) => void;
-  onExportProjectPDF: () => void;
+  onExportProjectPDF: (selectedIds?: string[]) => void;
   onExportChildDays: (child: Child) => void;
   onRename: (name: string) => Promise<void>;
   onDelete: () => void;
@@ -1515,6 +1517,7 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
   const [childModal, setChildModal] = useState<Child | "new" | null>(null);
   const [groupModal, setGroupModal] = useState<Group | "new" | null>(null);
   const [shareModal, setShareModal] = useState(false);
+  const [exportModal, setExportModal] = useState(false);
   const tabs = [{ id: "calendar", label: "📅" }, { id: "children", label: "👦" }, { id: "groups", label: "👥" }, { id: "settings", label: "⚙️" }];
   const tabLabels: Record<string, string> = { calendar: "Calendrier", children: "Enfants", groups: "Groupes", settings: "Paramètres" };
   return (
@@ -1532,9 +1535,10 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
       {/* Fix #5/#6: project export button */}
       {tab === "calendar" && (
         <div className="px-4 pt-3">
-          <button onClick={onExportProjectPDF} className="w-full text-xs text-blue-400 border border-blue-800/60 px-3 py-2 rounded-lg">📄 Récap. global PDF</button>
+          <button onClick={() => setExportModal(true)} className="w-full text-xs text-blue-400 border border-blue-800/60 px-3 py-2 rounded-lg">📄 Récap. global PDF</button>
         </div>
       )}
+      {exportModal && <SelectChildrenForExportModal project={project} onClose={() => setExportModal(false)} onConfirm={ids => onExportProjectPDF(ids)} />}
 
       <div className="px-4 py-4">
         {tab === "calendar" && <CalendarTab project={project} onOpenDay={onOpenDay} />}
@@ -1603,6 +1607,95 @@ function CalendarTab({ project, onOpenDay }: { project: Project; onOpenDay: (d: 
 }
 
 // Fix #1 + #3 + #4: ChildrenTab with archive + per-child export
+export function SelectChildrenForExportModal({ project, onConfirm, onClose }: {
+  project: Project;
+  onConfirm: (ids: string[]) => void;
+  onClose: () => void;
+}) {
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(project.children.filter(c => !c.archived).map(c => c.id)));
+  const [search, setSearch] = useState("");
+  const active = project.children.filter(c => !c.archived);
+  const sorted = sortByRoleThenAlpha(active);
+  const q = normalize(search);
+  const filtered = sorted.filter(c => {
+    if (!q) return true;
+    const hay = normalize(`${c.first_name} ${c.last_name}`);
+    const hay2 = normalize(`${c.last_name} ${c.first_name}`);
+    return hay.includes(q) || hay2.includes(q);
+  });
+  type SectionKey = ChildRole | "none";
+  const buckets: Record<SectionKey, Child[]> = { role: [], silhouette: [], figurant: [], none: [] };
+  for (const c of filtered) buckets[(c.role || "none") as SectionKey].push(c);
+  const order: SectionKey[] = ["role", "silhouette", "figurant", "none"];
+  const labels: Record<SectionKey, string> = { role: "Rôle", silhouette: "Silhouette", figurant: "Figurant·e", none: "Sans statut" };
+  const sections = order.filter(k => buckets[k].length > 0).map(k => ({ key: k, label: labels[k], children: buckets[k] }));
+
+  function toggle(id: string) { setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }); }
+  function selectAll() { setSelected(new Set(active.map(c => c.id))); }
+  function selectNone() { setSelected(new Set()); }
+  function selectSection(children: Child[], add: boolean) {
+    setSelected(s => { const n = new Set(s); for (const c of children) add ? n.add(c.id) : n.delete(c.id); return n; });
+  }
+
+  return (
+    <Modal title="Export PDF global — sélection" onClose={onClose}>
+      <div className="space-y-3">
+        <p className="text-xs text-slate-400">Sélectionne les enfants à inclure dans le récapitulatif.</p>
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="🔍 Rechercher…"
+            className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 placeholder:text-slate-500"
+          />
+          <span className="text-[10px] bg-blue-700/40 text-blue-200 px-2 py-1 rounded-lg font-bold whitespace-nowrap">{selected.size}/{active.length}</span>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={selectAll} className="text-[10px] text-slate-300 border border-slate-600 px-2 py-1 rounded-lg">Tout cocher</button>
+          <button onClick={selectNone} className="text-[10px] text-slate-400 border border-slate-700 px-2 py-1 rounded-lg">Tout décocher</button>
+        </div>
+        <div className="space-y-2 max-h-72 overflow-y-auto">
+          {sections.length === 0 && <div className="text-xs text-slate-500 text-center py-4">Aucun résultat.</div>}
+          {sections.map(({ key, label, children }) => {
+            const sel = children.filter(c => selected.has(c.id)).length;
+            const allSel = sel === children.length;
+            return (
+              <div key={key} className="bg-slate-900/40 border border-slate-700 rounded-lg overflow-hidden">
+                <div className="flex items-center gap-2 px-3 py-2 bg-slate-800/50">
+                  <span className="text-xs font-semibold text-slate-200 flex-1">{label} <span className="text-[10px] text-slate-500 font-normal">{sel}/{children.length}</span></span>
+                  <button onClick={() => selectSection(children, !allSel)} className="text-[10px] border border-slate-700 text-slate-400 px-2 py-1 rounded-lg">
+                    {allSel ? "Tout décocher" : "Tout cocher"}
+                  </button>
+                </div>
+                <div className="divide-y divide-slate-800">
+                  {children.map(c => (
+                    <label key={c.id} className="flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-slate-800/30">
+                      <input type="checkbox" className="accent-blue-500 w-4 h-4 flex-shrink-0" checked={selected.has(c.id)} onChange={() => toggle(c.id)} />
+                      <span className="text-sm text-slate-200 flex-1 truncate">{c.last_name} {c.first_name}</span>
+                      <span className="text-[10px] text-slate-500">{getAge(c.dob)} ans</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div className="flex gap-2">
+          <button onClick={onClose} className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-2.5 rounded-xl text-sm font-semibold">Annuler</button>
+          <button
+            onClick={() => { if (selected.size > 0) { onConfirm([...selected]); onClose(); } }}
+            disabled={selected.size === 0}
+            className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-colors ${selected.size > 0 ? "bg-blue-700 hover:bg-blue-600 text-white" : "bg-slate-800 text-slate-600 cursor-not-allowed"}`}
+          >
+            📄 Exporter ({selected.size})
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function ChildDeleteConfirmModal({ child, onConfirm, onClose }: { child: Child; onConfirm: () => void; onClose: () => void }) {
   type Step = "step1" | "step2";
   const [step, setStep] = useState<Step>("step1");

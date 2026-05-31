@@ -8,6 +8,7 @@ import {
   computeSessionStats, buildExportRows,
   exportDayToPDF, exportChildAllDays,
   exportProjectGlobalPDF,
+  SelectChildrenForExportModal,
   normalizeRules,
   type Project, type Child, type ShootingDay, type ChildRole,
 } from "@/components/child-actor-scheduler";
@@ -219,6 +220,7 @@ function ChildrenTab({ project }: { project: Project }) {
 // ─── ReadOnlyView ─────────────────────────────────────────────────────────────
 function ReadOnlyView({ project }: { project: Project }) {
   const [tab, setTab] = useState<"calendar" | "children">("calendar");
+  const [exportModal, setExportModal] = useState(false);
   const children = project.children.filter(c => !c.archived);
   const dayCount = Object.keys(project.shootingDays).length;
 
@@ -235,8 +237,15 @@ function ReadOnlyView({ project }: { project: Project }) {
 
       {/* Global export button */}
       <div className="px-4 pt-3">
-        <button onClick={() => exportProjectGlobalPDF(project)} className="w-full text-xs text-blue-400 border border-blue-800/60 px-3 py-2 rounded-lg">📄 Récap. global PDF</button>
+        <button onClick={() => setExportModal(true)} className="w-full text-xs text-blue-400 border border-blue-800/60 px-3 py-2 rounded-lg">📄 Récap. global PDF</button>
       </div>
+      {exportModal && (
+        <SelectChildrenForExportModal
+          project={project}
+          onClose={() => setExportModal(false)}
+          onConfirm={ids => exportProjectGlobalPDF(project, ids)}
+        />
+      )}
 
       <div className="px-4 py-4">
         {tab === "calendar" && <CalendarTab project={project} />}
