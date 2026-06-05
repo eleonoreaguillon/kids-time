@@ -15,7 +15,7 @@ import {
   parseExcelDate, sortByRoleThenAlpha, splitFullName, timeStrToISO, todayStr,
 } from "@/lib/helpers";
 import {
-  buildExportRows, exportChildAllDays, exportDayToPDF, exportProjectGlobalPDF,
+  buildExportRows, exportChildAllDays, exportDayBlankSheet, exportDayToPDF, exportProjectGlobalPDF,
 } from "@/lib/exports";
 import {
   ktCacheProject, ktCacheProjectList, ktEnqueue, ktLoadProject, ktLoadProjectList,
@@ -652,7 +652,8 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     onEditEventTime={(cid, idx, t) => editEventTime(activeDate, cid, idx, t)}
     onEditStartTime={(cid, t) => editStartTime(activeDate, cid, t)}
     onEditEndTime={(cid, t) => editEndTime(activeDate, cid, t)}
-    onExportPDF={() => exportDayToPDF(activeProject, activeDate)} /></>;
+    onExportPDF={() => exportDayToPDF(activeProject, activeDate)}
+    onPrintBlank={() => exportDayBlankSheet(activeProject, activeDate)} /></>;
   return null;
 }
 
@@ -2001,7 +2002,7 @@ function ManageChildrenList({ project, childIds, onToggleChild, onPendingUncheck
   );
 }
 
-function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSession, onCancelSession, onApplyEvent, onCancelLastEvent, onEndSessions, onReopenSession, onToggleChild, onAddGroup, onRemoveGroup, onEditEventTime, onEditStartTime, onEditEndTime, onExportPDF }: {
+function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSession, onCancelSession, onApplyEvent, onCancelLastEvent, onEndSessions, onReopenSession, onToggleChild, onAddGroup, onRemoveGroup, onEditEventTime, onEditStartTime, onEditEndTime, onExportPDF, onPrintBlank }: {
   project: Project; dateStr: string; onBack: () => void;
   onStartSessions: (cids: string[], t?: string) => void; onStartSession: (cid: string, t?: string) => void;
   onCancelSession: (cid: string) => void; onApplyEvent: (cids: string[], type: "pause_start" | "pause_end" | "dejeuner_start" | "dejeuner_end" | "school_start" | "school_end", t?: string) => void;
@@ -2010,6 +2011,7 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
   onAddGroup: (gid: string) => void; onRemoveGroup: (gid: string) => void;
   onEditEventTime: (cid: string, idx: number, t: string) => void; onEditStartTime: (cid: string, t: string) => void; onEditEndTime: (cid: string, t: string) => void;
   onExportPDF: () => void;
+  onPrintBlank: () => void;
 }) {
   const [, setTick] = useState(0);
   const [addingChildren, setAdding] = useState(false);
@@ -2058,6 +2060,7 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
             {/* Fix #7: selection count always visible */}
             <div className="text-xs text-slate-400">{childIds.length} enfant(s) · <span className={selected.size > 0 ? "text-blue-400 font-semibold" : ""}>{selected.size} sélectionné(s)</span></div>
           </div>
+          <button onClick={onPrintBlank} className="text-xs text-slate-300 border border-slate-600 px-2 py-1.5 rounded-lg flex-shrink-0" title="Fiche papier vierge à remplir au stylo">🖨</button>
           <button onClick={onExportPDF} className="text-xs text-blue-400 border border-blue-800/60 px-2 py-1.5 rounded-lg flex-shrink-0">PDF</button>
         </div>
 

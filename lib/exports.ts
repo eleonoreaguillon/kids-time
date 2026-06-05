@@ -111,6 +111,110 @@ export function exportDayToPDF(project: Project, dateStr: string) {
   const w = window.open("", "_blank"); if (w) { w.document.write(html); w.document.close(); setTimeout(() => w.print(), 500); }
 }
 
+// Fiche papier vierge a remplir au stylo sur le plateau (backup hors-ligne).
+// Optimisee A4 portrait, noir & blanc, lisible et avec assez d'espace pour
+// noter les horaires a la main.
+export function exportDayBlankSheet(project: Project, dateStr: string) {
+  const day = project.shootingDays[dateStr]; if (!day) return;
+  const dateLabel = new Date(dateStr + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  const orderedChildren = sortByRoleThenAlpha((day.child_ids || []).map(id => project.children.find(c => c.id === id)).filter(Boolean) as Child[]);
+  if (orderedChildren.length === 0) { alert("Aucun enfant prévu pour cette journée."); return; }
+
+  const childRow = (child: Child, i: number) => {
+    const band = getAgeBand(child.dob);
+    const vacation = isVacation(child, dateStr);
+    const period: Period = vacation ? "vacation" : "school";
+    const maxWork = project.rules.maxWorkMinutes[band][period];
+    const maxAmp = project.rules.maxAmplitudeMinutes;
+    return `<tr>
+      <td class="num">${i + 1}</td>
+      <td class="name"><b>${child.last_name.toUpperCase()}</b> ${child.first_name}<br><span class="meta">${getAge(child.dob)} ans · ${AGE_BAND_LABELS[band]} · ${child.role ? ROLE_LABELS[child.role] : "—"} · ${vacation ? "Vacances" : "Scolaire"}</span></td>
+      <td class="t cap">Max travail<br><b>${formatMinutes(maxWork)}</b><br>Max ampl.<br><b>${formatMinutes(maxAmp)}</b></td>
+      <td class="t"></td>
+      <td class="t"></td>
+      <td class="t"></td>
+      <td class="t"></td>
+      <td class="t"></td>
+      <td class="t"></td>
+    </tr>`;
+  };
+
+  const html = `<html><head><meta charset="utf-8"><title>Fiche papier — ${dateLabel}</title>
+  <style>
+    @page { size: A4 portrait; margin: 10mm 10mm 12mm 10mm; }
+    body { font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: #000; margin: 0; }
+    .back-btn { display: inline-block; margin: 8px; padding: 8px 16px; background: #1e3a5f; color: white; border: none; border-radius: 8px; font-size: 13px; cursor: pointer; }
+    .sheet { padding: 4mm 6mm; }
+    h1 { font-size: 16px; margin: 0 0 2px 0; }
+    .sub { font-size: 11px; margin: 0 0 6px 0; }
+    .header { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #000; padding-bottom: 4px; margin-bottom: 6px; }
+    .header .right { text-align: right; font-size: 9px; line-height: 1.4; }
+    .header .right .field { display: inline-block; min-width: 100px; border-bottom: 1px solid #000; padding: 0 4px 1px; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    th { background: #000; color: white; font-size: 9px; padding: 4px 3px; text-align: center; font-weight: 600; border: 0.5px solid #000; }
+    td { border: 0.5px solid #555; padding: 4px 3px; vertical-align: top; height: 38px; }
+    td.num { width: 4%; text-align: center; font-weight: 700; font-size: 11px; }
+    td.name { width: 19%; font-size: 10px; }
+    td.name .meta { font-size: 7.5px; color: #444; }
+    td.t { width: 9%; }
+    td.cap { width: 11%; font-size: 8px; text-align: center; color: #444; background: #f4f4f4; }
+    .legend { font-size: 8px; color: #444; margin-top: 6px; }
+    .remarks { margin-top: 6mm; border: 1px solid #000; padding: 4px 6px; min-height: 28mm; }
+    .remarks-title { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 2px; }
+    .footer { font-size: 7.5px; color: #666; margin-top: 4mm; text-align: center; border-top: 0.5px solid #ccc; padding-top: 2px; }
+    @media print { .back-btn { display: none; } }
+  </style></head><body>
+  <button class="back-btn" onclick="window.close()">← Retour</button>
+  <div class="sheet">
+    <div class="header">
+      <div>
+        <h1>KIDSTIME — Fiche de tournage (papier)</h1>
+        <div class="sub"><b>${project.name}</b> — ${dateLabel}</div>
+      </div>
+      <div class="right">
+        AD enfants : <span class="field">&nbsp;</span><br>
+        Production : <span class="field">&nbsp;</span><br>
+        Lieu : <span class="field">&nbsp;</span>
+      </div>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th style="text-align:left;padding-left:6px">Nom Prénom</th>
+          <th>Limites<br>DRIEETS</th>
+          <th>Convoc.</th>
+          <th>Pause<br>début</th>
+          <th>Pause<br>fin</th>
+          <th>Déjeuner<br>début</th>
+          <th>Déjeuner<br>fin</th>
+          <th>Fin de<br>journée</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${orderedChildren.map(childRow).join("")}
+      </tbody>
+    </table>
+
+    <div class="legend">
+      Remplir au stylo. Reporter ensuite dans l'app KidsTime pour archivage et exports DRIEETS. Toutes les colonnes horaires sont au format HH:MM.
+    </div>
+
+    <div class="remarks">
+      <div class="remarks-title">Remarques / Événements de la journée</div>
+    </div>
+
+    <div class="footer">
+      Généré par KidsTime · ${new Date().toLocaleDateString("fr-FR")} · Backup papier à conserver
+    </div>
+  </div>
+  </body></html>`;
+
+  const w = window.open("", "_blank");
+  if (w) { w.document.write(html); w.document.close(); setTimeout(() => w.print(), 500); }
+}
+
 // PDF "toutes les journees d'un enfant" — une ligne par jour
 export function exportChildAllDays(project: Project, child: Child) {
   const days = Object.entries(project.shootingDays)
