@@ -85,8 +85,26 @@ function Btn({ children, variant = "primary", className = "", ...props }: { chil
 export default function App() {
   const [session, setSession] = useState<any>(undefined);
   useEffect(() => {
+    // Si l'utilisateur arrive depuis un magic link de reset de mot de passe,
+    // Supabase emet l'evenement PASSWORD_RECOVERY. On le capte AVANT tout pour
+    // rediriger vers /reset-password meme si la session est creee au passage.
+    if (typeof window !== "undefined" && window.location.pathname !== "/reset-password") {
+      const hash = window.location.hash || "";
+      if (hash.includes("type=recovery")) {
+        window.location.replace("/reset-password" + hash);
+        return;
+      }
+    }
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_ev, s) => setSession(s));
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
+      // En cas de recuperation de mot de passe, force la navigation vers la
+      // page dediee — meme si l'utilisateur est deja sur une autre page.
+      if (event === "PASSWORD_RECOVERY" && typeof window !== "undefined" && window.location.pathname !== "/reset-password") {
+        window.location.href = "/reset-password";
+        return;
+      }
+      setSession(s);
+    });
     return () => subscription.unsubscribe();
   }, []);
   if (session === undefined) return <div className="min-h-screen bg-[#080d16] flex items-center justify-center"><div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" /></div>;
