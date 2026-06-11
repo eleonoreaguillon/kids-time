@@ -28,6 +28,7 @@ import {
 
 export function buildExportRows(project: Project, dateStr: string) {
   const day = project.shootingDays[dateStr]; if (!day) return [];
+  const showAmpOver = project.rules.showAmplitudeOverage !== false;
   const rows: any[] = [];
   // Tri statut → nom de famille (alpha) pour des exports coherents avec l'ecran
   const orderedChildren = sortByRoleThenAlpha((day.child_ids || []).map(id => project.children.find(c => c.id === id)).filter(Boolean) as Child[]);
@@ -64,8 +65,8 @@ export function buildExportRows(project: Project, dateStr: string) {
       "Plages horaires des pauses": breakSlotsStr,
       "Amplitude de présence": stats ? formatMinutes(stats.amplitudeMin) : "--",
       "Amplitude autorisée": formatMinutes(maxAmp),
-      "Dépassement amplitude": ampOver > 0 ? formatMinutes(ampOver) : "0",
-      _child: child, _session: session, _stats: stats, _maxWork: maxWork, _maxAmp: maxAmp, _vacation: vacation, _band: band, _date: dateStr,
+      ...(showAmpOver ? { "Dépassement amplitude": ampOver > 0 ? formatMinutes(ampOver) : "0" } : {}),
+      _child: child, _session: session, _stats: stats, _maxWork: maxWork, _maxAmp: maxAmp, _vacation: vacation, _band: band, _date: dateStr, _showAmpOver: showAmpOver,
     });
   }
   return rows;
@@ -75,6 +76,7 @@ export function buildExportRows(project: Project, dateStr: string) {
 export function exportDayToPDF(project: Project, dateStr: string) {
   const day = project.shootingDays[dateStr]; if (!day) return;
   const dateLabel = new Date(dateStr + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  const showAmpOver = project.rules.showAmplitudeOverage !== false;
   const childTable = (row: any) => {
     const { _child: child, _session: session, _stats: stats, _maxWork: maxWork, _maxAmp: maxAmp, _vacation: vacation, _band: band } = row;
     const workOver = stats ? Math.max(0, stats.workMin - maxWork) : 0;
@@ -85,7 +87,7 @@ export function exportDayToPDF(project: Project, dateStr: string) {
     const showSchool = child.school_tracking || (stats && stats.schoolMin > 0);
     return `<table><tr><th colspan="4">${child.first_name} ${child.last_name}${child.role ? ` — ${ROLE_LABELS[child.role as ChildRole]}` : ""} — ${getAge(child.dob)} ans (${band} ans) — ${vacation ? "Vacances" : "Scolaire"}</th></tr>
       <tr><td><b>Convocation</b><br>${session?.start_time ? formatTime(session.start_time) : "--"}</td><td><b>Fin</b><br>${session?.end_time ? formatTime(session.end_time) : "--"}</td><td><b>Amplitude</b><br>${stats ? formatMinutes(stats.amplitudeMin) : "--"}</td><td><b>Max amplitude</b><br>${formatMinutes(maxAmp)}</td></tr>
-      <tr><td><b>Travail total</b><br>${stats ? formatMinutes(stats.workMin) : "--"}</td><td><b>Max travail</b><br>${formatMinutes(maxWork)}</td><td><b>Dépass. travail</b><br><span class="${workOver > 0 ? "over" : "ok"}">${workOver > 0 ? formatMinutes(workOver) : "OK"}</span></td><td><b>Dépass. amplitude</b><br><span class="${ampOver > 0 ? "over" : "ok"}">${ampOver > 0 ? formatMinutes(ampOver) : "OK"}</span></td></tr>
+      <tr><td><b>Travail total</b><br>${stats ? formatMinutes(stats.workMin) : "--"}</td><td><b>Max travail</b><br>${formatMinutes(maxWork)}</td><td><b>Dépass. travail</b><br><span class="${workOver > 0 ? "over" : "ok"}">${workOver > 0 ? formatMinutes(workOver) : "OK"}</span></td>${showAmpOver ? `<td><b>Dépass. amplitude</b><br><span class="${ampOver > 0 ? "over" : "ok"}">${ampOver > 0 ? formatMinutes(ampOver) : "OK"}</span></td>` : `<td></td>`}</tr>
       <tr><td><b>🍽 Déjeuner</b><br>${stats ? formatMinutes(stats.dejeunerMin) : "--"}</td><td><b>Plages déjeuner</b><br>${dStr}</td><td><b>Pauses valides</b><br>${stats ? formatMinutes(stats.validBreakMin) : "--"}</td><td><b>Plages de pauses</b><br>${bStr}</td></tr>
       ${showSchool ? `<tr><td><b>📚 Suivi scolaire</b><br>${stats ? formatMinutes(stats.schoolMin) : "--"}</td><td colspan="3"><b>Plages suivi scolaire</b><br>${sStr}</td></tr>` : ""}</table>`;
   };
@@ -222,6 +224,7 @@ export function exportChildAllDays(project: Project, child: Child) {
     .sort(([a], [b]) => a.localeCompare(b));
   if (days.length === 0) { alert("Cet enfant n'a aucune journée enregistrée."); return; }
 
+  const showAmpOver = project.rules.showAmplitudeOverage !== false;
   const childTable = (dateStr: string, day: ShootingDay) => {
     const session = day.sessions?.[child.id];
     const vacation = isVacation(child, dateStr);
@@ -241,7 +244,7 @@ export function exportChildAllDays(project: Project, child: Child) {
       <td>${vacation ? "🌴 Vac." : "🏫 Scol."}</td>
       <td>${session?.start_time ? formatTime(session.start_time) : "--"}</td>
       <td>${session?.end_time ? formatTime(session.end_time) : "--"}</td>
-      <td><span style="color:${ampOver > 0 ? "#dc2626" : stats && stats.amplitudeMin === maxAmp ? "#ea580c" : "#16a34a"}">${stats ? formatMinutes(stats.amplitudeMin) : "--"} / ${formatMinutes(maxAmp)}</span></td>
+      <td><span style="color:${showAmpOver && ampOver > 0 ? "#dc2626" : showAmpOver && stats && stats.amplitudeMin === maxAmp ? "#ea580c" : "#16a34a"}">${stats ? formatMinutes(stats.amplitudeMin) : "--"} / ${formatMinutes(maxAmp)}</span></td>
       <td><span style="color:${workOver > 0 ? "#dc2626" : "#16a34a"}">${stats ? formatMinutes(stats.workMin) : "--"} / ${formatMinutes(maxWork)}</span></td>
       <td>${stats ? formatMinutes(stats.dejeunerMin) : "--"}</td>
       ${child.school_tracking ? `<td>${stats ? formatMinutes(stats.schoolMin) : "--"}</td>` : ""}
@@ -278,6 +281,7 @@ export function exportProjectGlobalPDF(project: Project, selectedIds?: string[])
   const sortedDates = Object.keys(project.shootingDays).sort();
   if (sortedDates.length === 0) { alert("Aucune journée de tournage dans ce projet."); return; }
   const filterSet = selectedIds && selectedIds.length > 0 ? new Set(selectedIds) : null;
+  const showAmpOver = project.rules.showAmplitudeOverage !== false;
 
   const fmtHHMM = (min: number | null | undefined): string => {
     if (!min || min <= 0) return "";
@@ -400,14 +404,14 @@ export function exportProjectGlobalPDF(project: Project, selectedIds?: string[])
         <tr>
           <td ${TDL} style="text-align:left;padding:3px 6px;border:1px solid #ccc;font-size:8px;background:#f4f6fb;font-weight:bold;white-space:nowrap">Amplitude de présence</td>
           <td ${TDT()}></td>
-          ${cells(d => { const amp = d.stats?.amplitudeMin ?? 0; const over = amp > d.maxAmp; const warn = amp === d.maxAmp && amp > 0; return `<b style="color:${over ? "#dc2626" : warn ? "#ea580c" : "inherit"}">${fmtHHMM(amp)}</b>`; })}
+          ${cells(d => { const amp = d.stats?.amplitudeMin ?? 0; const over = showAmpOver && amp > d.maxAmp; const warn = showAmpOver && amp === d.maxAmp && amp > 0; return `<b style="color:${over ? "#dc2626" : warn ? "#ea580c" : "inherit"}">${fmtHHMM(amp)}</b>`; })}
         </tr>
         <tr><td ${TDL}>Amplitude autorisée</td><td ${TDT()}></td>${cells(d => fmtHHMM(d.maxAmp))}</tr>
-        <tr>
+        ${showAmpOver ? `<tr>
           <td ${TDL} style="text-align:left;padding:3px 6px;border:1px solid #ccc;font-size:8px;background:#fff5f5;color:#dc2626;white-space:nowrap">Dépassement amplitude</td>
           <td ${TDT(totAmpOver > 0 ? "color:#dc2626" : "")}>${fmtHHMM(totAmpOver)}</td>
           ${cells(d => { const ov = Math.max(0,(d.stats?.amplitudeMin??0)-d.maxAmp); return ov>0?`<span class="over">${fmtHHMM(ov)}</span>`:""; })}
-        </tr>
+        </tr>` : ""}
       </tbody>
     </table></div>`;
   }

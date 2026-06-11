@@ -13,6 +13,8 @@ export interface Rules {
   minBreakMinutes: number;
   minRestBetweenDays: number;
   maxDaysPerWeek: number;
+  /** Affiche le depassement d'amplitude dans les exports (default: true) */
+  showAmplitudeOverage?: boolean;
 }
 
 export interface VacationPeriod { start: string; end: string; }
@@ -110,6 +112,7 @@ export const DEFAULT_RULES: Rules = {
   minBreakMinutes: 15,
   minRestBetweenDays: 840,
   maxDaysPerWeek: 5,
+  showAmplitudeOverage: true,
 };
 
 export const AGE_BANDS: AgeBand[] = ["0-2", "3-5", "6-11", "12-16", "16-18"];

@@ -1752,6 +1752,23 @@ function SettingsTab({ rules, onUpdateRules, projectName, onRename, onDelete }: 
         </div>
       ))}
 
+      {/* Options d'export */}
+      <div className="mt-2">
+        <h3 className="text-xs font-semibold text-slate-300 mb-2 uppercase tracking-wider">Options des exports</h3>
+        <label className="flex items-start gap-3 bg-slate-900/50 border border-slate-700 rounded-xl p-3 cursor-pointer">
+          <input
+            type="checkbox"
+            className="accent-blue-500 w-5 h-5 mt-0.5 flex-shrink-0"
+            checked={rules.showAmplitudeOverage !== false}
+            onChange={e => onUpdateRules(r => ({ ...r, showAmplitudeOverage: e.target.checked }))}
+          />
+          <div className="flex-1">
+            <div className="text-sm text-white">Afficher le dépassement d&apos;amplitude</div>
+            <div className="text-[10px] text-slate-400 mt-0.5">Si décoché, l&apos;information &laquo;&nbsp;dépassement d&apos;amplitude&nbsp;&raquo; n&apos;apparaît dans aucun PDF (jour, par enfant, récap global).</div>
+          </div>
+        </label>
+      </div>
+
       {/* Zone de danger */}
       <div className="mt-6 border border-red-900/60 rounded-2xl p-4 bg-red-950/20">
         <h2 className="font-bold text-sm text-red-400 mb-1" style={{ fontFamily: "Syne, sans-serif" }}>⚠️ Zone de danger</h2>

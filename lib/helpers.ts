@@ -43,6 +43,8 @@ export function normalizeRules(rules: Rules): Rules {
     if (!next.maxWorkMinutes[band]) next.maxWorkMinutes[band] = { ...DEFAULT_RULES.maxWorkMinutes[band] };
     if (!next.mandatoryBreakAfterMinutes[band]) next.mandatoryBreakAfterMinutes[band] = { ...DEFAULT_RULES.mandatoryBreakAfterMinutes[band] };
   }
+  // Retro-compat des flags d'affichage : default true
+  if (next.showAmplitudeOverage === undefined) next.showAmplitudeOverage = true;
   return next as Rules;
 }
 
