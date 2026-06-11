@@ -97,14 +97,27 @@ export default function App() {
 // Fix #2: persistent login — supabase handles session persistence by default via localStorage
 // We also add autocomplete attributes so the browser/iPhone offers to save the password
 function AuthPage({ onAuth }: { onAuth: (s: any) => void }) {
-  const [mode, setMode] = useState<"login" | "signup">("login");
+  const [mode, setMode] = useState<"login" | "signup" | "forgot">("login");
   const [email, setEmail] = useState(""); const [pass, setPass] = useState("");
   const [error, setError] = useState(""); const [loading, setLoading] = useState(false);
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setError(""); setLoading(true);
     try {
-      if (mode === "login") { const { data, error } = await supabase.auth.signInWithPassword({ email, password: pass }); if (error) throw error; onAuth(data.session); }
-      else { const { error } = await supabase.auth.signUp({ email, password: pass }); if (error) throw error; setError("✅ Compte créé ! Vérifiez votre e-mail puis connectez-vous."); setMode("login"); }
+      if (mode === "login") {
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password: pass });
+        if (error) throw error;
+        onAuth(data.session);
+      } else if (mode === "signup") {
+        const { error } = await supabase.auth.signUp({ email, password: pass });
+        if (error) throw error;
+        setError("✅ Compte créé ! Vérifiez votre e-mail puis connectez-vous.");
+        setMode("login");
+      } else if (mode === "forgot") {
+        const redirectTo = typeof window !== "undefined" ? `${window.location.origin}/reset-password` : undefined;
+        const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
+        if (error) throw error;
+        setError("✅ Un lien de réinitialisation vient d'être envoyé. Vérifie ta boîte mail (et les spams).");
+      }
     } catch (err: any) { setError(err.message); } setLoading(false);
   }
   return (
@@ -120,16 +133,37 @@ function AuthPage({ onAuth }: { onAuth: (s: any) => void }) {
         </div>
       </div>
       <div className="relative z-10 w-full max-w-sm bg-slate-900/70 border border-slate-700 rounded-2xl p-6 backdrop-blur">
-        <div className="flex mb-5 bg-slate-800 rounded-xl p-1">
-          {(["login", "signup"] as const).map(m => <button key={m} onClick={() => { setMode(m); setError(""); }} className={`flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all ${mode === m ? "bg-blue-600 text-white" : "text-slate-400 hover:text-white"}`}>{m === "login" ? "Connexion" : "Créer un compte"}</button>)}
-        </div>
-        {/* Fix #2: autocomplete attributes for password saving */}
+        {mode !== "forgot" && (
+          <div className="flex mb-5 bg-slate-800 rounded-xl p-1">
+            {(["login", "signup"] as const).map(m => <button key={m} onClick={() => { setMode(m); setError(""); }} className={`flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all ${mode === m ? "bg-blue-600 text-white" : "text-slate-400 hover:text-white"}`}>{m === "login" ? "Connexion" : "Créer un compte"}</button>)}
+          </div>
+        )}
+        {mode === "forgot" && (
+          <div className="mb-5 text-center">
+            <div className="text-sm font-bold text-white mb-1">Mot de passe oublié</div>
+            <div className="text-xs text-slate-400">Indique l&apos;adresse e-mail de ton compte, nous t&apos;enverrons un lien de réinitialisation.</div>
+          </div>
+        )}
         <form onSubmit={submit} className="space-y-3" autoComplete="on">
           <TextInput label="Adresse e-mail" type="email" autoComplete="email" placeholder="vous@exemple.com" value={email} onChange={e => setEmail(e.target.value)} required />
-          <TextInput label="Mot de passe" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} placeholder="••••••••" value={pass} onChange={e => setPass(e.target.value)} required />
+          {mode !== "forgot" && (
+            <TextInput label="Mot de passe" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} placeholder="••••••••" value={pass} onChange={e => setPass(e.target.value)} required />
+          )}
           {error && <div className={`text-xs px-3 py-2 rounded-lg ${error.startsWith("✅") ? "bg-emerald-900/40 text-emerald-300" : "bg-red-900/40 text-red-300"}`}>{error}</div>}
-          <button type="submit" disabled={loading} className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white py-3.5 rounded-xl font-bold text-sm transition-colors">{loading ? "Chargement…" : mode === "login" ? "Se connecter" : "Créer mon compte"}</button>
+          <button type="submit" disabled={loading} className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white py-3.5 rounded-xl font-bold text-sm transition-colors">
+            {loading ? "Chargement…" : mode === "login" ? "Se connecter" : mode === "signup" ? "Créer mon compte" : "M'envoyer le lien"}
+          </button>
         </form>
+        {mode === "login" && (
+          <button onClick={() => { setMode("forgot"); setError(""); setPass(""); }} className="mt-3 w-full text-center text-xs text-slate-400 hover:text-blue-400 transition-colors">
+            Mot de passe oublié ?
+          </button>
+        )}
+        {mode === "forgot" && (
+          <button onClick={() => { setMode("login"); setError(""); }} className="mt-3 w-full text-center text-xs text-slate-400 hover:text-white transition-colors">
+            ← Retour à la connexion
+          </button>
+        )}
       </div>
     </div>
   );
