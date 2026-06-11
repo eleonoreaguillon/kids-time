@@ -1763,8 +1763,8 @@ function SettingsTab({ rules, onUpdateRules, projectName, onRename, onDelete }: 
             onChange={e => onUpdateRules(r => ({ ...r, showAmplitudeOverage: e.target.checked }))}
           />
           <div className="flex-1">
-            <div className="text-sm text-white">Afficher le dépassement d&apos;amplitude</div>
-            <div className="text-[10px] text-slate-400 mt-0.5">Si décoché, l&apos;information &laquo;&nbsp;dépassement d&apos;amplitude&nbsp;&raquo; n&apos;apparaît dans aucun PDF (jour, par enfant, récap global).</div>
+            <div className="text-sm text-white">Afficher les informations d&apos;amplitude max</div>
+            <div className="text-[10px] text-slate-400 mt-0.5">Si décoché, les colonnes &laquo;&nbsp;amplitude autorisée&nbsp;&raquo; et &laquo;&nbsp;dépassement d&apos;amplitude&nbsp;&raquo; n&apos;apparaissent dans aucun PDF (jour, par enfant, récap global). Seule l&apos;amplitude de présence reste affichée.</div>
           </div>
         </label>
       </div>
