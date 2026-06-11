@@ -246,7 +246,7 @@ export function exportChildAllDays(project: Project, child: Child) {
       <td>${vacation ? "🌴 Vac." : "🏫 Scol."}</td>
       <td>${session?.start_time ? formatTime(session.start_time) : "--"}</td>
       <td>${session?.end_time ? formatTime(session.end_time) : "--"}</td>
-      <td><span style="color:${showAmpOver && ampOver > 0 ? "#dc2626" : showAmpOver && stats && stats.amplitudeMin === maxAmp ? "#ea580c" : "#16a34a"}">${stats ? formatMinutes(stats.amplitudeMin) : "--"}${showAmpOver ? ` / ${formatMinutes(maxAmp)}` : ""}</span></td>
+      <td><span style="color:${!showAmpOver ? "inherit" : ampOver > 0 ? "#dc2626" : stats && stats.amplitudeMin === maxAmp ? "#ea580c" : "#16a34a"}">${stats ? formatMinutes(stats.amplitudeMin) : "--"}${showAmpOver ? ` / ${formatMinutes(maxAmp)}` : ""}</span></td>
       <td><span style="color:${workOver > 0 ? "#dc2626" : "#16a34a"}">${stats ? formatMinutes(stats.workMin) : "--"} / ${formatMinutes(maxWork)}</span></td>
       <td>${stats ? formatMinutes(stats.dejeunerMin) : "--"}</td>
       ${child.school_tracking ? `<td>${stats ? formatMinutes(stats.schoolMin) : "--"}</td>` : ""}
