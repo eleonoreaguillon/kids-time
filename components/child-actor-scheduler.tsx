@@ -943,6 +943,7 @@ function ShareModal({ project, onClose, onGenerate, onSetPassword, onRevoke }: {
 function HomeView({ projects, userEmail, onCreate, onOpen, onSignOut }: { projects: Project[]; userEmail: string; onCreate: (n: string) => void; onOpen: (id: string) => void; onSignOut: () => void }) {
   const [name, setName] = useState("");
   const [showRgpd, setShowRgpd] = useState(false);
+  const [showAccount, setShowAccount] = useState(false);
   return (
     <div className="min-h-screen bg-[#080d16] text-white" style={{ fontFamily: "'DM Mono', monospace" }}>
       <div className="fixed inset-0 opacity-[0.025]" style={{ backgroundImage: "linear-gradient(#fff 1px,transparent 1px),linear-gradient(90deg,#fff 1px,transparent 1px)", backgroundSize: "40px 40px" }} />
@@ -953,7 +954,11 @@ function HomeView({ projects, userEmail, onCreate, onOpen, onSignOut }: { projec
             <div className="text-[10px] text-blue-400 tracking-[0.35em] uppercase mb-2">Gestion des mineurs · Audiovisuel</div>
             <h1 className="text-4xl font-extrabold tracking-tight" style={{ fontFamily: "Syne, sans-serif" }}><span className="text-white">KIDS</span><span className="text-blue-500">TIME</span></h1>
           </div>
-          <div className="text-right mt-1"><div className="text-xs text-slate-500 mb-1 truncate max-w-[140px]">{userEmail}</div><button onClick={onSignOut} className="text-xs text-slate-500 hover:text-red-400 transition-colors">Déconnexion</button></div>
+          <div className="text-right mt-1 flex flex-col items-end gap-1">
+            <div className="text-xs text-slate-500 truncate max-w-[140px]">{userEmail}</div>
+            <button onClick={() => setShowAccount(true)} className="text-xs text-slate-500 hover:text-blue-400 transition-colors">⚙ Mon compte</button>
+            <button onClick={onSignOut} className="text-xs text-slate-500 hover:text-red-400 transition-colors">Déconnexion</button>
+          </div>
         </div>
         <div className="bg-slate-900/60 border border-slate-700 rounded-2xl p-4 mb-6">
           <div className="text-[10px] text-slate-400 uppercase tracking-wider mb-3">Nouvelle production</div>
@@ -986,6 +991,126 @@ function HomeView({ projects, userEmail, onCreate, onOpen, onSignOut }: { projec
       </div>
 
       {showRgpd && <RgpdDeleteModal onClose={() => setShowRgpd(false)} userEmail={userEmail} />}
+      {showAccount && <AccountModal onClose={() => setShowAccount(false)} userEmail={userEmail} />}
+    </div>
+  );
+}
+
+function AccountModal({ onClose, userEmail }: { onClose: () => void; userEmail: string }) {
+  const [currentPwd, setCurrentPwd] = useState("");
+  const [newPwd, setNewPwd] = useState("");
+  const [confirmPwd, setConfirmPwd] = useState("");
+  const [showPwd, setShowPwd] = useState(false);
+  const [status, setStatus] = useState<"idle" | "saving" | "done" | "error">("idle");
+  const [errMsg, setErrMsg] = useState("");
+
+  const MIN = 6;
+  const newValid = newPwd.length >= MIN;
+  const matches = newPwd === confirmPwd;
+  const distinct = newPwd !== currentPwd;
+  const canSubmit = currentPwd.length > 0 && newValid && matches && distinct;
+
+  async function handleSubmit() {
+    if (!canSubmit) return;
+    setStatus("saving"); setErrMsg("");
+    // 1) Verifie le mot de passe actuel en signant a nouveau
+    const { error: signErr } = await supabase.auth.signInWithPassword({ email: userEmail, password: currentPwd });
+    if (signErr) { setStatus("error"); setErrMsg("Mot de passe actuel incorrect."); return; }
+    // 2) Met a jour avec le nouveau
+    const { error: updErr } = await supabase.auth.updateUser({ password: newPwd });
+    if (updErr) { setStatus("error"); setErrMsg(updErr.message); return; }
+    setStatus("done");
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm px-4 pb-4" onClick={status === "saving" ? undefined : onClose}>
+      <div className="bg-[#0f1a2e] border border-slate-700 rounded-2xl w-full max-w-md p-5 space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h2 className="font-bold text-white" style={{ fontFamily: "Syne, sans-serif" }}>⚙ Mon compte</h2>
+          <button onClick={onClose} className="text-slate-400 hover:text-white w-8 h-8 flex items-center justify-center">✕</button>
+        </div>
+
+        <div className="bg-slate-900/70 border border-slate-700 rounded-xl p-3 text-xs space-y-1">
+          <div className="text-slate-500 uppercase tracking-wider">Adresse e-mail</div>
+          <div className="text-white font-mono break-all">{userEmail}</div>
+        </div>
+
+        {status === "done" ? (
+          <>
+            <div className="bg-emerald-950/30 border border-emerald-800/60 rounded-xl p-4 text-sm space-y-1">
+              <div className="text-emerald-300 font-bold">✓ Mot de passe mis à jour</div>
+              <div className="text-xs text-slate-400">La modification est immédiate sur ce compte.</div>
+            </div>
+            <button onClick={onClose} className="w-full bg-blue-700 hover:bg-blue-600 text-white py-3 rounded-xl text-sm font-bold transition-colors">
+              Fermer
+            </button>
+          </>
+        ) : (
+          <>
+            <div>
+              <h3 className="text-xs font-semibold text-slate-300 mb-3 uppercase tracking-wider">Changer le mot de passe</h3>
+              <div className="space-y-3">
+                <div className="space-y-1">
+                  <label className="text-[10px] text-slate-400 uppercase tracking-wider">Mot de passe actuel</label>
+                  <div className="relative">
+                    <input
+                      type={showPwd ? "text" : "password"}
+                      value={currentPwd}
+                      onChange={e => setCurrentPwd(e.target.value)}
+                      autoComplete="current-password"
+                      className="w-full bg-slate-800 border border-slate-600 rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:border-blue-500 placeholder:text-slate-600 pr-10"
+                      placeholder="••••••••"
+                    />
+                    <button type="button" onClick={() => setShowPwd(v => !v)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs">
+                      {showPwd ? "🙈" : "👁"}
+                    </button>
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] text-slate-400 uppercase tracking-wider">Nouveau mot de passe</label>
+                  <input
+                    type={showPwd ? "text" : "password"}
+                    value={newPwd}
+                    onChange={e => setNewPwd(e.target.value)}
+                    autoComplete="new-password"
+                    className="w-full bg-slate-800 border border-slate-600 rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:border-blue-500 placeholder:text-slate-600"
+                    placeholder={`Min. ${MIN} caractères`}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] text-slate-400 uppercase tracking-wider">Confirmer</label>
+                  <input
+                    type={showPwd ? "text" : "password"}
+                    value={confirmPwd}
+                    onChange={e => setConfirmPwd(e.target.value)}
+                    autoComplete="new-password"
+                    className="w-full bg-slate-800 border border-slate-600 rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:border-blue-500 placeholder:text-slate-600"
+                    placeholder="Re-saisis le nouveau mot de passe"
+                  />
+                </div>
+                {newPwd.length > 0 && !newValid && <div className="text-[10px] text-red-400">Le nouveau mot de passe doit faire au moins {MIN} caractères.</div>}
+                {confirmPwd.length > 0 && !matches && <div className="text-[10px] text-red-400">Les deux mots de passe ne correspondent pas.</div>}
+                {newValid && !distinct && <div className="text-[10px] text-amber-400">Le nouveau mot de passe doit être différent de l&apos;ancien.</div>}
+              </div>
+            </div>
+
+            {status === "error" && (
+              <div className="bg-red-950/40 border border-red-800/60 rounded-xl p-3 text-xs text-red-300">
+                {errMsg}
+              </div>
+            )}
+
+            <button
+              onClick={handleSubmit}
+              disabled={!canSubmit || status === "saving"}
+              className={`w-full py-3 rounded-xl text-sm font-bold transition-colors ${canSubmit && status !== "saving" ? "bg-blue-700 hover:bg-blue-600 text-white" : "bg-slate-800 text-slate-600 cursor-not-allowed"}`}
+            >
+              {status === "saving" ? "Enregistrement…" : "Changer le mot de passe"}
+            </button>
+          </>
+        )}
+      </div>
     </div>
   );
 }
