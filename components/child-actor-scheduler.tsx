@@ -782,6 +782,24 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
   }
   async function reopenSession(dateStr: string, childId: string) { const day = activeProject!.shootingDays[dateStr]; if (!day) return; const sessions = { ...(day.sessions || {}) }; sessions[childId] = { ...sessions[childId], status: "working", end_time: undefined }; await updateDaySessions(dateStr, sessions); }
   async function editEventTime(dateStr: string, childId: string, eventIndex: number, newTimeISO: string) { const day = activeProject!.shootingDays[dateStr]; if (!day) return; const sessions = { ...(day.sessions || {}) }; const s = { ...sessions[childId] }; const events = [...(s.events || [])]; events[eventIndex] = { ...events[eventIndex], time: newTimeISO }; s.events = events; sessions[childId] = s; await updateDaySessions(dateStr, sessions); }
+  // Supprime un evenement de la timeline. Le status est recalcule a partir du
+  // dernier evenement restant (start = en pause/dejeuner/scolaire, end = en
+  // travail). Bloque si la session est terminee (utilisez "Rouvrir" d'abord).
+  async function deleteEvent(dateStr: string, childId: string, eventIndex: number) {
+    const day = activeProject!.shootingDays[dateStr]; if (!day) return;
+    const sessions = { ...(day.sessions || {}) };
+    const s = sessions[childId]; if (!s?.events?.length) return;
+    if (s.status === "done") return;
+    const events = [...s.events];
+    events.splice(eventIndex, 1);
+    let status: Session["status"] = "working";
+    const last = events[events.length - 1];
+    if (last?.type === "pause_start")    status = "paused";
+    else if (last?.type === "dejeuner_start") status = "dejeuner";
+    else if (last?.type === "school_start")   status = "school";
+    sessions[childId] = { ...s, events, status };
+    await persistDay({ ...day, sessions });
+  }
   async function editStartTime(dateStr: string, childId: string, newTimeISO: string) { const day = activeProject!.shootingDays[dateStr]; if (!day) return; const sessions = { ...(day.sessions || {}) }; sessions[childId] = { ...sessions[childId], start_time: newTimeISO }; await updateDaySessions(dateStr, sessions); }
   async function editEndTime(dateStr: string, childId: string, newTimeISO: string) { const day = activeProject!.shootingDays[dateStr]; if (!day) return; const sessions = { ...(day.sessions || {}) }; sessions[childId] = { ...sessions[childId], end_time: newTimeISO }; await updateDaySessions(dateStr, sessions); }
 
@@ -820,6 +838,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     onAddGroup={gid => addGroupToDay(activeDate, gid)}
     onRemoveGroup={gid => removeGroupFromDay(activeDate, gid)}
     onEditEventTime={(cid, idx, t) => editEventTime(activeDate, cid, idx, t)}
+    onDeleteEvent={(cid, idx) => deleteEvent(activeDate, cid, idx)}
     onEditStartTime={(cid, t) => editStartTime(activeDate, cid, t)}
     onEditEndTime={(cid, t) => editEndTime(activeDate, cid, t)}
     onExportPDF={() => exportDayToPDF(activeProject, activeDate)}
@@ -2314,7 +2333,7 @@ function ManageChildrenList({ project, childIds, onToggleChild, onPendingUncheck
   );
 }
 
-function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSession, onCancelSession, onApplyEvent, onResumeAs, onResumeOneAs, onTransition, onTransitionOne, onCancelLastEvent, onEndSessions, onReopenSession, onToggleChild, onAddGroup, onRemoveGroup, onEditEventTime, onEditStartTime, onEditEndTime, onExportPDF, onPrintBlank }: {
+function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSession, onCancelSession, onApplyEvent, onResumeAs, onResumeOneAs, onTransition, onTransitionOne, onCancelLastEvent, onEndSessions, onReopenSession, onToggleChild, onAddGroup, onRemoveGroup, onEditEventTime, onDeleteEvent, onEditStartTime, onEditEndTime, onExportPDF, onPrintBlank }: {
   project: Project; dateStr: string; onBack: () => void;
   onStartSessions: (cids: string[], t?: string, kind?: "travail" | "dejeuner" | "school") => void;
   onStartSession: (cid: string, t?: string, kind?: "travail" | "dejeuner" | "school") => void;
@@ -2328,6 +2347,7 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
   onReopenSession: (cid: string) => void; onToggleChild: (cid: string) => void;
   onAddGroup: (gid: string) => void; onRemoveGroup: (gid: string) => void;
   onEditEventTime: (cid: string, idx: number, t: string) => void; onEditStartTime: (cid: string, t: string) => void; onEditEndTime: (cid: string, t: string) => void;
+  onDeleteEvent: (cid: string, idx: number) => void;
   onExportPDF: () => void;
   onPrintBlank: () => void;
 }) {
@@ -2485,7 +2505,7 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
                 isExpanded={isExpanded} onToggleExpand={() => setExpandedId(isExpanded ? null : id)}
                 onStart={(t, kind) => onStartSession(id, t, kind)} onCancelSession={() => onCancelSession(id)}
                 onCancelLastEvent={() => onCancelLastEvent(id)} onReopenSession={() => onReopenSession(id)}
-                onEditEventTime={(idx, t) => onEditEventTime(id, idx, t)} onEditStartTime={t => onEditStartTime(id, t)} onEditEndTime={t => onEditEndTime(id, t)}
+                onEditEventTime={(idx, t) => onEditEventTime(id, idx, t)} onDeleteEvent={(idx) => onDeleteEvent(id, idx)} onEditStartTime={t => onEditStartTime(id, t)} onEditEndTime={t => onEditEndTime(id, t)}
                 onApplyEvent={(type, t) => onApplyEvent([id], type, t)}
                 onResumeAs={(t, kind) => onResumeOneAs(id, t, kind)}
                 onTransitionOne={(t, target) => onTransitionOne(id, t, target)}
@@ -2625,13 +2645,15 @@ function SingleStartButton({ onStart, dateStr, schoolAvailable }: { onStart: (t?
 }
 
 // Fix #1: compact ChildCard with expand/collapse
-function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, vacation, isSelected, onSelect, isExpanded, onToggleExpand, onStart, onCancelSession, onCancelLastEvent, onReopenSession, onEditEventTime, onEditStartTime, onEditEndTime, onApplyEvent, onResumeAs, onTransitionOne, onEndSession, dateStr }: {
+function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, vacation, isSelected, onSelect, isExpanded, onToggleExpand, onStart, onCancelSession, onCancelLastEvent, onReopenSession, onEditEventTime, onDeleteEvent, onEditStartTime, onEditEndTime, onApplyEvent, onResumeAs, onTransitionOne, onEndSession, dateStr }: {
   child: Child; session: Session | undefined; stats: SessionStats | null;
   maxWork: number; breakAfter: number; maxAmplitude: number; vacation: boolean;
   isSelected: boolean; onSelect: () => void;
   isExpanded: boolean; onToggleExpand: () => void;
   onStart: (t?: string, kind?: "travail" | "dejeuner" | "school") => void; onCancelSession: () => void; onCancelLastEvent: () => void; onReopenSession: () => void;
-  onEditEventTime: (idx: number, t: string) => void; onEditStartTime: (t: string) => void; onEditEndTime: (t: string) => void;
+  onEditEventTime: (idx: number, t: string) => void;
+  onDeleteEvent: (idx: number) => void;
+  onEditStartTime: (t: string) => void; onEditEndTime: (t: string) => void;
   onApplyEvent: (type: "pause_start" | "pause_end" | "dejeuner_start" | "dejeuner_end" | "school_start" | "school_end", t?: string) => void;
   onResumeAs: (t?: string, kind?: "travail" | "dejeuner" | "school") => void;
   onTransitionOne: (t: string | undefined, target: TransitionTarget) => void;
@@ -2640,6 +2662,7 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
 }) {
   const [editingIdx, setEditingIdx] = useState<number | "start" | "end" | null>(null);
   const [indivModal, setIndivModal] = useState<{ mode: "transition" } | null>(null);
+  const [deleteEventIdx, setDeleteEventIdx] = useState<number | null>(null);
   const [editTime, setEditTime] = useState("");
   const workPct  = stats ? Math.min(100, (stats.workMin / maxWork) * 100) : 0;
   const ampPct   = stats ? Math.min(100, (stats.amplitudeMin / maxAmplitude) * 100) : 0;
@@ -2735,7 +2758,8 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
                   <TimelineRow label="▶ Début" iso={session?.start_time} isEditing={editingIdx === "start"} editTime={editTime} onEdit={() => startEdit("start", session?.start_time)} onTimeChange={setEditTime} onConfirm={confirmEdit} onCancel={() => setEditingIdx(null)} />
                   {events.map((ev, i) => <TimelineRow key={i}
                     label={ev.type === "pause_start" ? "⏸ Pause" : ev.type === "pause_end" ? "▶ Reprise" : ev.type === "dejeuner_start" ? "🍽 Déjeuner" : ev.type === "dejeuner_end" ? "▶ Reprise déj." : ev.type === "school_start" ? "📚 Suivi scolaire" : "▶ Reprise (sco.)"}
-                    iso={ev.time} isEditing={editingIdx === i} editTime={editTime} onEdit={() => startEdit(i, ev.time)} onTimeChange={setEditTime} onConfirm={confirmEdit} onCancel={() => setEditingIdx(null)} />)}
+                    iso={ev.time} isEditing={editingIdx === i} editTime={editTime} onEdit={() => startEdit(i, ev.time)} onTimeChange={setEditTime} onConfirm={confirmEdit} onCancel={() => setEditingIdx(null)}
+                    onDelete={session?.status !== "done" ? () => { setEditingIdx(null); setDeleteEventIdx(i); } : undefined} />)}
                   {session?.end_time && <TimelineRow label="⏹ Fin" iso={session.end_time} isEditing={editingIdx === "end"} editTime={editTime} onEdit={() => startEdit("end", session.end_time)} onTimeChange={setEditTime} onConfirm={confirmEdit} onCancel={() => setEditingIdx(null)} />}
                 </div>
               </div>
@@ -2750,6 +2774,38 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
         </div>
       )}
 
+      {deleteEventIdx !== null && session?.events?.[deleteEventIdx] && (() => {
+        const ev = session.events[deleteEventIdx];
+        const evLabels: Record<string, string> = {
+          pause_start: "⏸ Mise en pause", pause_end: "▶ Reprise",
+          dejeuner_start: "🍽 Déjeuner", dejeuner_end: "▶ Reprise déjeuner",
+          school_start: "📚 Suivi scolaire", school_end: "▶ Reprise (sco.)",
+        };
+        return (
+          <Modal title="Supprimer cette action ?" onClose={() => setDeleteEventIdx(null)}>
+            <div className="space-y-4">
+              <div className="bg-red-950/30 border border-red-800/60 rounded-xl p-3 text-xs space-y-2">
+                <div className="text-red-300 font-bold">Action irréversible</div>
+                <div className="text-slate-300">
+                  Tu vas supprimer l&apos;événement <b className="text-white">{evLabels[ev.type] || ev.type}</b> à <b className="text-white">{formatTime(ev.time)}</b> sur la fiche de <b className="text-white">{child.first_name} {child.last_name}</b>.
+                </div>
+                <div className="text-slate-400">
+                  Les statistiques de la journée seront recalculées en conséquence.
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <Btn variant="ghost" className="flex-1" onClick={() => setDeleteEventIdx(null)}>Annuler</Btn>
+                <button
+                  onClick={() => { onDeleteEvent(deleteEventIdx); setDeleteEventIdx(null); }}
+                  className="flex-1 bg-red-700 hover:bg-red-600 text-white py-3 rounded-xl text-sm font-bold transition-colors"
+                >
+                  Supprimer
+                </button>
+              </div>
+            </div>
+          </Modal>
+        );
+      })()}
       {indivModal && (() => {
         const cur = session?.status;
         const all: TransitionTarget[] = ["travail", "pause", "dejeuner", "school", "end"];
@@ -2774,14 +2830,15 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
   );
 }
 
-function TimelineRow({ label, iso, isEditing, editTime, onEdit, onTimeChange, onConfirm, onCancel }: { label: string; iso: string | undefined; isEditing: boolean; editTime: string; onEdit: () => void; onTimeChange: (t: string) => void; onConfirm: () => void; onCancel: () => void }) {
+function TimelineRow({ label, iso, isEditing, editTime, onEdit, onTimeChange, onConfirm, onCancel, onDelete }: { label: string; iso: string | undefined; isEditing: boolean; editTime: string; onEdit: () => void; onTimeChange: (t: string) => void; onConfirm: () => void; onCancel: () => void; onDelete?: () => void }) {
   return (
     <div className="flex items-center gap-2 text-xs">
       <span className="text-slate-400 w-20 flex-shrink-0 text-[10px]">{label}</span>
       {isEditing ? (
         <><input type="time" value={editTime} onChange={e => onTimeChange(e.target.value)} className="bg-slate-700 border border-blue-500 rounded px-2 py-1 text-white text-xs flex-1" />
-          <button onClick={onConfirm} className="text-emerald-400 w-7 h-7 flex items-center justify-center">✓</button>
-          <button onClick={onCancel} className="text-slate-500 w-7 h-7 flex items-center justify-center">✕</button></>
+          <button onClick={onConfirm} className="text-emerald-400 w-7 h-7 flex items-center justify-center" title="Confirmer">✓</button>
+          {onDelete && <button onClick={onDelete} className="text-red-400 w-7 h-7 flex items-center justify-center" title="Supprimer cette action">🗑</button>}
+          <button onClick={onCancel} className="text-slate-500 w-7 h-7 flex items-center justify-center" title="Annuler">✕</button></>
       ) : (
         <button onClick={onEdit} className="text-blue-300 hover:underline">{formatTime(iso)}</button>
       )}
