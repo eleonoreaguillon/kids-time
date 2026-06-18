@@ -602,15 +602,64 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     const ids = (day.child_ids || []).filter(id => !group.child_ids.includes(id));
     await persistDay({ ...day, child_ids: ids });
   }
-  async function startSessionsSequentially(dateStr: string, childIds: string[], timeISO?: string) {
+  // kind par defaut "travail" : compatible avec les anciens appels.
+  // "dejeuner" / "school" : la session demarre directement dans cet etat.
+  async function startSessionsSequentially(dateStr: string, childIds: string[], timeISO?: string, kind: "travail" | "dejeuner" | "school" = "travail") {
     const day = ensureLocalDay(dateStr);
     const sessions = { ...(day.sessions || {}) };
+    const time = timeISO || nowISO();
     let changed = false;
-    for (const childId of childIds) { if (!sessions[childId]?.start_time) { sessions[childId] = { start_time: timeISO || nowISO(), events: [], status: "working" }; changed = true; } }
+    for (const childId of childIds) {
+      if (sessions[childId]?.start_time) continue; // deja demarree
+      // Pour school : seuls les enfants avec le flag sont concernes
+      let effectiveKind: "travail" | "dejeuner" | "school" = kind;
+      if (kind === "school") {
+        const child = activeProject!.children.find(c => c.id === childId);
+        if (!child?.school_tracking) effectiveKind = "travail";
+      }
+      if (effectiveKind === "dejeuner") {
+        sessions[childId] = { start_time: time, events: [{ type: "dejeuner_start", time }], status: "dejeuner" };
+      } else if (effectiveKind === "school") {
+        sessions[childId] = { start_time: time, events: [{ type: "school_start", time }], status: "school" };
+      } else {
+        sessions[childId] = { start_time: time, events: [], status: "working" };
+      }
+      changed = true;
+    }
     if (!changed) return;
     await persistDay({ ...day, sessions });
   }
-  async function startSession(dateStr: string, childId: string, timeISO?: string) { await startSessionsSequentially(dateStr, [childId], timeISO); }
+  async function startSession(dateStr: string, childId: string, timeISO?: string, kind?: "travail" | "dejeuner" | "school") {
+    await startSessionsSequentially(dateStr, [childId], timeISO, kind);
+  }
+  // Reprise atomique : termine la pause/dejeuner/school en cours, puis demarre
+  // optionnellement un nouvel evenement (dejeuner ou school) au lieu de
+  // retourner en travail.
+  async function resumeSessionsAs(dateStr: string, childIds: string[], timeISO?: string, kind: "travail" | "dejeuner" | "school" = "travail") {
+    const day = activeProject!.shootingDays[dateStr]; if (!day) return;
+    const sessions = { ...(day.sessions || {}) };
+    const time = timeISO || nowISO();
+    for (const childId of childIds) {
+      const s = sessions[childId]; if (!s?.start_time || s.status === "done") continue;
+      if (s.status !== "paused" && s.status !== "dejeuner" && s.status !== "school") continue;
+      const events = [...(s.events || [])];
+      // 1) Ferme l'etat en cours
+      if (s.status === "paused") events.push({ type: "pause_end", time });
+      else if (s.status === "dejeuner") events.push({ type: "dejeuner_end", time });
+      else if (s.status === "school") events.push({ type: "school_end", time });
+      // 2) Demarre le nouvel etat eventuellement
+      let effectiveKind = kind;
+      if (effectiveKind === "school") {
+        const child = activeProject!.children.find(c => c.id === childId);
+        if (!child?.school_tracking) effectiveKind = "travail";
+      }
+      let newStatus: Session["status"] = "working";
+      if (effectiveKind === "dejeuner") { events.push({ type: "dejeuner_start", time }); newStatus = "dejeuner"; }
+      else if (effectiveKind === "school") { events.push({ type: "school_start", time }); newStatus = "school"; }
+      sessions[childId] = { ...s, events, status: newStatus };
+    }
+    await persistDay({ ...day, sessions });
+  }
   async function cancelSession(dateStr: string, childId: string) { const day = activeProject!.shootingDays[dateStr]; if (!day) return; const sessions = { ...(day.sessions || {}) }; delete sessions[childId]; await updateDaySessions(dateStr, sessions); }
   async function applyEventToChildren(dateStr: string, childIds: string[], eventType: "pause_start" | "pause_end" | "dejeuner_start" | "dejeuner_end" | "school_start" | "school_end", timeISO?: string) {
     const day = activeProject!.shootingDays[dateStr]; if (!day) return;
@@ -691,10 +740,12 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
   /></>;
   if (view === "shooting" && activeProject && activeDate) return <><Fonts /><OfflineBanner /><ShootingView project={activeProject} dateStr={activeDate}
     onBack={() => { setView("project"); refreshActive(); }}
-    onStartSessions={(cids, t) => startSessionsSequentially(activeDate, cids, t)}
-    onStartSession={(cid, t) => startSession(activeDate, cid, t)}
+    onStartSessions={(cids, t, kind) => startSessionsSequentially(activeDate, cids, t, kind)}
+    onStartSession={(cid, t, kind) => startSession(activeDate, cid, t, kind)}
     onCancelSession={cid => cancelSession(activeDate, cid)}
     onApplyEvent={(cids, type, t) => applyEventToChildren(activeDate, cids, type, t)}
+    onResumeAs={(cids, t, kind) => resumeSessionsAs(activeDate, cids, t, kind)}
+    onResumeOneAs={(cid, t, kind) => resumeSessionsAs(activeDate, [cid], t, kind)}
     onCancelLastEvent={cid => cancelLastEvent(activeDate, cid)}
     onEndSessions={(cids, t) => endSessions(activeDate, cids, t)}
     onReopenSession={cid => reopenSession(activeDate, cid)}
@@ -2196,10 +2247,14 @@ function ManageChildrenList({ project, childIds, onToggleChild, onPendingUncheck
   );
 }
 
-function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSession, onCancelSession, onApplyEvent, onCancelLastEvent, onEndSessions, onReopenSession, onToggleChild, onAddGroup, onRemoveGroup, onEditEventTime, onEditStartTime, onEditEndTime, onExportPDF, onPrintBlank }: {
+function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSession, onCancelSession, onApplyEvent, onResumeAs, onResumeOneAs, onCancelLastEvent, onEndSessions, onReopenSession, onToggleChild, onAddGroup, onRemoveGroup, onEditEventTime, onEditStartTime, onEditEndTime, onExportPDF, onPrintBlank }: {
   project: Project; dateStr: string; onBack: () => void;
-  onStartSessions: (cids: string[], t?: string) => void; onStartSession: (cid: string, t?: string) => void;
-  onCancelSession: (cid: string) => void; onApplyEvent: (cids: string[], type: "pause_start" | "pause_end" | "dejeuner_start" | "dejeuner_end" | "school_start" | "school_end", t?: string) => void;
+  onStartSessions: (cids: string[], t?: string, kind?: "travail" | "dejeuner" | "school") => void;
+  onStartSession: (cid: string, t?: string, kind?: "travail" | "dejeuner" | "school") => void;
+  onCancelSession: (cid: string) => void;
+  onApplyEvent: (cids: string[], type: "pause_start" | "pause_end" | "dejeuner_start" | "dejeuner_end" | "school_start" | "school_end", t?: string) => void;
+  onResumeAs: (cids: string[], t?: string, kind?: "travail" | "dejeuner" | "school") => void;
+  onResumeOneAs: (cid: string, t?: string, kind?: "travail" | "dejeuner" | "school") => void;
   onCancelLastEvent: (cid: string) => void; onEndSessions: (cids: string[], t?: string) => void;
   onReopenSession: (cid: string) => void; onToggleChild: (cid: string) => void;
   onAddGroup: (gid: string) => void; onRemoveGroup: (gid: string) => void;
@@ -2346,10 +2401,11 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
               return <ChildCard key={id} child={child} session={session} stats={stats} maxWork={maxWork} breakAfter={breakAfter} maxAmplitude={rules.maxAmplitudeMinutes} vacation={vacation}
                 isSelected={selected.has(id)} onSelect={() => toggleSelect(id)}
                 isExpanded={isExpanded} onToggleExpand={() => setExpandedId(isExpanded ? null : id)}
-                onStart={t => onStartSession(id, t)} onCancelSession={() => onCancelSession(id)}
+                onStart={(t, kind) => onStartSession(id, t, kind)} onCancelSession={() => onCancelSession(id)}
                 onCancelLastEvent={() => onCancelLastEvent(id)} onReopenSession={() => onReopenSession(id)}
                 onEditEventTime={(idx, t) => onEditEventTime(id, idx, t)} onEditStartTime={t => onEditStartTime(id, t)} onEditEndTime={t => onEditEndTime(id, t)}
                 onApplyEvent={(type, t) => onApplyEvent([id], type, t)}
+                onResumeAs={(t, kind) => onResumeOneAs(id, t, kind)}
                 onEndSession={t => onEndSessions([id], t)}
                 dateStr={dateStr} />;
             })}</div>
@@ -2378,15 +2434,17 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
         </Modal>
       )}
 
-      {actionModal && <TimeActionModal type={actionModal.type} childCount={selected.size} dateStr={dateStr}
-        onConfirm={timeISO => {
+      {actionModal && <TimeActionModal
+        type={actionModal.type} childCount={selected.size} dateStr={dateStr}
+        schoolAvailable={[...selected].some(id => childHasSchool(id))}
+        onConfirm={(timeISO, kind) => {
           const ids = [...selected];
-          if      (actionModal.type === "start")    onStartSessions(ids, timeISO);
-          else if (actionModal.type === "pause")    onApplyEvent(ids, "pause_start", timeISO);
+          if (actionModal.type === "start")        onStartSessions(ids, timeISO, kind);
+          else if (actionModal.type === "resume")  onResumeAs(ids, timeISO, kind);
+          else if (actionModal.type === "pause")   onApplyEvent(ids, "pause_start", timeISO);
           else if (actionModal.type === "dejeuner") onApplyEvent(ids, "dejeuner_start", timeISO);
-          else if (actionModal.type === "school")   onApplyEvent(ids, "school_start", timeISO);
-          else if (actionModal.type === "resume")   onApplyEvent(ids, "pause_end", timeISO);
-          else if (actionModal.type === "end")      onEndSessions(ids, timeISO);
+          else if (actionModal.type === "school")  onApplyEvent(ids, "school_start", timeISO);
+          else if (actionModal.type === "end")     onEndSessions(ids, timeISO);
           setActionModal(null);
         }}
         onClose={() => setActionModal(null)} />}
@@ -2394,50 +2452,96 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
   );
 }
 
-function TimeActionModal({ type, childCount, dateStr, onConfirm, onClose }: { type: string; childCount: number; dateStr: string; onConfirm: (t: string) => void; onClose: () => void }) {
+function TimeActionModal({ type, childCount, dateStr, schoolAvailable, onConfirm, onClose }: {
+  type: string;
+  childCount: number;
+  dateStr: string;
+  /** Si au moins un enfant concerne a le flag school_tracking active, on
+   *  propose le bouton Suivi scolaire dans les modes start et resume. */
+  schoolAvailable?: boolean;
+  /** Pour start/resume, on renvoie aussi le sous-type choisi : travail /
+   *  dejeuner / school. */
+  onConfirm: (t: string, kind?: "travail" | "dejeuner" | "school") => void;
+  onClose: () => void;
+}) {
   const now = new Date();
   const [timeStr, setTimeStr] = useState(`${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`);
+  const askKind = type === "start" || type === "resume";
+  const [kind, setKind] = useState<"travail" | "dejeuner" | "school">("travail");
   const labels: Record<string, string> = { start: "Démarrer", pause: "Mise en pause", dejeuner: "Pause déjeuner", school: "Suivi scolaire", resume: "Reprise", end: "Fin de journée" };
+  const kindBtn = (k: "travail" | "dejeuner" | "school", icon: string, label: string, bg: string, fg: string, bd: string) => (
+    <button
+      type="button"
+      onClick={() => setKind(k)}
+      className={`flex-1 py-3 rounded-xl text-xs font-bold border transition-colors ${kind === k ? `${bg} ${fg} ${bd}` : "bg-slate-900 text-slate-500 border-slate-700 hover:text-white"}`}
+    >
+      <span className="block text-base">{icon}</span>
+      <span>{label}</span>
+    </button>
+  );
   return (
     <Modal title={`${labels[type]} — ${childCount} enfant(s)`} onClose={onClose}>
       <div className="space-y-4">
+        {askKind && (
+          <div className="space-y-2">
+            <label className="text-[10px] text-slate-400 uppercase tracking-wider">Type de session à démarrer</label>
+            <div className="flex gap-2">
+              {kindBtn("travail",  "▶",  "Travail",       "bg-emerald-900/70", "text-emerald-200", "border-emerald-600")}
+              {kindBtn("dejeuner", "🍽", "Déjeuner",      "bg-orange-900/70",  "text-orange-200",  "border-orange-600")}
+              {schoolAvailable && kindBtn("school", "📚", "Suivi sco.", "bg-indigo-900/70", "text-indigo-200", "border-indigo-600")}
+            </div>
+          </div>
+        )}
         <input type="time" value={timeStr} onChange={e => setTimeStr(e.target.value)} className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-4 text-white text-3xl text-center focus:outline-none focus:border-blue-500" />
         <div className="text-xs text-slate-500 text-center">Modifiez si l&apos;événement a eu lieu avant</div>
         <div className="flex gap-3">
           <Btn variant="ghost" className="flex-1" onClick={onClose}>Annuler</Btn>
-          <button onClick={() => onConfirm(timeStrToISO(dateStr, timeStr))} className="flex-1 py-3 rounded-xl font-bold text-sm bg-blue-600 text-white">Confirmer — {timeStr}</button>
+          <button onClick={() => onConfirm(timeStrToISO(dateStr, timeStr), askKind ? kind : undefined)} className="flex-1 py-3 rounded-xl font-bold text-sm bg-blue-600 text-white">Confirmer — {timeStr}</button>
         </div>
       </div>
     </Modal>
   );
 }
 
-function SingleStartButton({ onStart, dateStr }: { onStart: (t?: string) => void; dateStr: string }) {
+function SingleStartButton({ onStart, dateStr, schoolAvailable }: { onStart: (t?: string, kind?: "travail" | "dejeuner" | "school") => void; dateStr: string; schoolAvailable?: boolean }) {
   const now = new Date();
   const def = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
   const [open, setOpen] = useState(false);
   const [timeStr, setTimeStr] = useState(def);
+  const [kind, setKind] = useState<"travail" | "dejeuner" | "school">("travail");
   if (!open) return <button onClick={() => setOpen(true)} className="w-full bg-emerald-700 text-white py-3 rounded-xl font-semibold text-sm">▶ Démarrer la journée</button>;
+  const kindBtn = (k: "travail" | "dejeuner" | "school", icon: string, label: string, bg: string, fg: string, bd: string) => (
+    <button type="button" onClick={() => setKind(k)}
+      className={`flex-1 py-2 rounded-lg text-[10px] font-bold border ${kind === k ? `${bg} ${fg} ${bd}` : "bg-slate-900 text-slate-500 border-slate-700"}`}>
+      <span className="block text-sm">{icon}</span>{label}
+    </button>
+  );
   return (
     <div className="bg-slate-800/60 border border-slate-600 rounded-xl p-4 space-y-3">
+      <div className="flex gap-2">
+        {kindBtn("travail",  "▶",  "Travail",       "bg-emerald-900/70", "text-emerald-200", "border-emerald-600")}
+        {kindBtn("dejeuner", "🍽", "Déjeuner",      "bg-orange-900/70",  "text-orange-200",  "border-orange-600")}
+        {schoolAvailable && kindBtn("school", "📚", "Suivi sco.", "bg-indigo-900/70", "text-indigo-200", "border-indigo-600")}
+      </div>
       <input type="time" value={timeStr} onChange={e => setTimeStr(e.target.value)} className="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-3 text-white text-xl text-center focus:outline-none focus:border-blue-500" />
       <div className="flex gap-2">
         <Btn variant="ghost" className="flex-1 py-2.5" onClick={() => setOpen(false)}>Annuler</Btn>
-        <button onClick={() => onStart(timeStrToISO(dateStr, timeStr))} className="flex-1 bg-emerald-700 text-white py-2.5 rounded-xl font-bold text-sm">Démarrer à {timeStr}</button>
+        <button onClick={() => onStart(timeStrToISO(dateStr, timeStr), kind)} className="flex-1 bg-emerald-700 text-white py-2.5 rounded-xl font-bold text-sm">Démarrer à {timeStr}</button>
       </div>
     </div>
   );
 }
 
 // Fix #1: compact ChildCard with expand/collapse
-function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, vacation, isSelected, onSelect, isExpanded, onToggleExpand, onStart, onCancelSession, onCancelLastEvent, onReopenSession, onEditEventTime, onEditStartTime, onEditEndTime, onApplyEvent, onEndSession, dateStr }: {
+function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, vacation, isSelected, onSelect, isExpanded, onToggleExpand, onStart, onCancelSession, onCancelLastEvent, onReopenSession, onEditEventTime, onEditStartTime, onEditEndTime, onApplyEvent, onResumeAs, onEndSession, dateStr }: {
   child: Child; session: Session | undefined; stats: SessionStats | null;
   maxWork: number; breakAfter: number; maxAmplitude: number; vacation: boolean;
   isSelected: boolean; onSelect: () => void;
   isExpanded: boolean; onToggleExpand: () => void;
-  onStart: (t?: string) => void; onCancelSession: () => void; onCancelLastEvent: () => void; onReopenSession: () => void;
+  onStart: (t?: string, kind?: "travail" | "dejeuner" | "school") => void; onCancelSession: () => void; onCancelLastEvent: () => void; onReopenSession: () => void;
   onEditEventTime: (idx: number, t: string) => void; onEditStartTime: (t: string) => void; onEditEndTime: (t: string) => void;
   onApplyEvent: (type: "pause_start" | "pause_end" | "dejeuner_start" | "dejeuner_end" | "school_start" | "school_end", t?: string) => void;
+  onResumeAs: (t?: string, kind?: "travail" | "dejeuner" | "school") => void;
   onEndSession: (t?: string) => void;
   dateStr: string;
 }) {
@@ -2505,7 +2609,7 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
       {/* Expanded details */}
       {isExpanded && (
         <div className="px-3 pb-3 border-t border-slate-700/50 pt-3 space-y-3">
-          {!session?.start_time && <SingleStartButton onStart={onStart} dateStr={dateStr} />}
+          {!session?.start_time && <SingleStartButton onStart={onStart} dateStr={dateStr} schoolAvailable={!!child.school_tracking} />}
           {session?.status === "done" && <div className="text-center text-emerald-400 text-sm font-semibold">✓ Journée terminée</div>}
 
           {stats && (
@@ -2559,12 +2663,14 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
         </div>
       )}
 
-      {indivModal && <TimeActionModal type={indivModal.type} childCount={1} dateStr={dateStr}
-        onConfirm={timeISO => {
-          if      (indivModal.type === "pause")    onApplyEvent("pause_start", timeISO);
+      {indivModal && <TimeActionModal
+        type={indivModal.type} childCount={1} dateStr={dateStr}
+        schoolAvailable={!!child.school_tracking}
+        onConfirm={(timeISO, kind) => {
+          if      (indivModal.type === "resume")   onResumeAs(timeISO, kind);
+          else if (indivModal.type === "pause")    onApplyEvent("pause_start", timeISO);
           else if (indivModal.type === "dejeuner") onApplyEvent("dejeuner_start", timeISO);
           else if (indivModal.type === "school")   onApplyEvent("school_start", timeISO);
-          else if (indivModal.type === "resume")   onApplyEvent("pause_end", timeISO);
           else if (indivModal.type === "end")      onEndSession(timeISO);
           setIndivModal(null);
         }}
