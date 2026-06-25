@@ -387,7 +387,7 @@ export function exportProjectGlobalPDF(project: Project, selectedIds?: string[],
           <td ${TDV()}></td>${headerDates}
         </tr>
         <tr>
-          <td ${TDL} style="text-align:left;padding:2px 6px;border:1px solid #ccc;font-size:7px;color:#b45309;background:#fffbeb">VACANCES</td>
+          <td ${TDL} style="text-align:left;padding:2px 6px;border:1px solid #ccc;font-size:7px;color:#b45309;background:#fffbeb">Vacances scolaires</td>
           <td ${TDV()}></td>
           ${sortedDates.map(ds => `<td ${TDV(dd[ds].inDay && dd[ds].vacation ? "background:#fffbeb;color:#b45309;font-weight:bold" : "")}>${dd[ds].inDay && dd[ds].vacation ? "VAC" : ""}</td>`).join("")}
         </tr>
