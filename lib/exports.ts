@@ -91,7 +91,7 @@ export function exportDayToPDF(project: Project, dateStr: string) {
       <tr><td><b>Convocation</b><br>${session?.start_time ? formatTime(session.start_time) : "--"}</td><td><b>Fin</b><br>${session?.end_time ? formatTime(session.end_time) : "--"}</td><td><b>Amplitude</b><br>${stats ? formatMinutes(stats.amplitudeMin) : "--"}</td>${showAmpOver ? `<td><b>Max amplitude</b><br>${formatMinutes(maxAmp)}</td>` : `<td></td>`}</tr>
       <tr><td><b>Travail total</b><br>${stats ? formatMinutes(stats.workMin) : "--"}</td><td><b>Max travail</b><br>${formatMinutes(maxWork)}</td><td><b>Dépass. travail</b><br><span class="${workOver > 0 ? "over" : "ok"}">${workOver > 0 ? formatMinutes(workOver) : "OK"}</span></td>${showAmpOver ? `<td><b>Dépass. amplitude</b><br><span class="${ampOver > 0 ? "over" : "ok"}">${ampOver > 0 ? formatMinutes(ampOver) : "OK"}</span></td>` : `<td></td>`}</tr>
       <tr><td><b>🍽 Déjeuner</b><br>${stats ? formatMinutes(stats.dejeunerMin) : "--"}</td><td><b>Plages déjeuner</b><br>${dStr}</td><td><b>Pauses valides</b><br>${stats ? formatMinutes(stats.validBreakMin) : "--"}</td><td><b>Plages de pauses</b><br>${bStr}</td></tr>
-      ${showSchool ? `<tr><td><b>📚 Suivi scolaire</b><br>${stats ? formatMinutes(stats.schoolMin) : "--"}</td><td colspan="3"><b>Plages suivi scolaire</b><br>${sStr}</td></tr>` : ""}</table>`;
+      ${showSchool ? `<tr><td><b>Suivi scolaire</b><br>${stats ? formatMinutes(stats.schoolMin) : "--"}</td><td colspan="3"><b>Plages suivi scolaire</b><br>${sStr}</td></tr>` : ""}</table>`;
   };
   const allRows = buildExportRows(project, dateStr);
   let html = `<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -269,7 +269,7 @@ export function exportChildAllDays(project: Project, child: Child) {
   <h1>KidsTime — Journées de ${child.first_name} ${child.last_name}</h1>
   <h2>${child.role ? ROLE_LABELS[child.role] + " · " : ""}${getAge(child.dob)} ans · Tranche ${AGE_BAND_LABELS[getAgeBand(child.dob)]} · ${project.name}</h2>
   <table><thead><tr>
-    <th>Date</th><th>Période</th><th>Début</th><th>Fin</th><th>Amplitude</th><th>Travail / Max</th><th>🍽 Déjeuner</th>${child.school_tracking ? "<th>📚 Suivi sco.</th>" : ""}<th>Pauses valides</th><th>Plages déjeuner / pauses${child.school_tracking ? " / sco." : ""}</th>
+    <th>Date</th><th>Période</th><th>Début</th><th>Fin</th><th>Amplitude</th><th>Travail / Max</th><th>🍽 Déjeuner</th>${child.school_tracking ? "<th>Suivi sco.</th>" : ""}<th>Pauses valides</th><th>Plages déjeuner / pauses${child.school_tracking ? " / sco." : ""}</th>
   </tr></thead><tbody>`;
   for (const [dateStr, day] of days) { html += childTable(dateStr, day); }
   html += `</tbody></table>
@@ -396,7 +396,7 @@ export function exportProjectGlobalPDF(project: Project, selectedIds?: string[],
         <tr><td ${TDL}>Heure de convocation</td><td ${TDT()}></td>${cells(d => d.session?.start_time ? formatTime(d.session.start_time) : "")}</tr>
         <tr><td ${TDL}>Durée de pause déjeuner</td><td ${TDT()}></td>${cells(d => fmtHHMM(d.stats?.dejeunerMin ?? 0))}</tr>
         <tr><td ${TDL}>Durée des autres pauses</td><td ${TDT()}></td>${cells(d => fmtHHMM(d.stats?.validBreakMin ?? 0))}</tr>
-        ${child.school_tracking || totSchool > 0 ? `<tr><td ${TDL}>📚 Suivi scolaire</td><td ${TDT()}>${fmtHHMM(totSchool)}</td>${cells(d => fmtHHMM(d.stats?.schoolMin ?? 0))}</tr>` : ""}
+        ${child.school_tracking || totSchool > 0 ? `<tr><td ${TDL}>Suivi scolaire</td><td ${TDT()}>${fmtHHMM(totSchool)}</td>${cells(d => fmtHHMM(d.stats?.schoolMin ?? 0))}</tr>` : ""}
         <tr>
           <td ${TDL} style="text-align:left;padding:3px 6px;border:1px solid #ccc;font-size:8px;background:#f4f6fb;font-weight:bold;white-space:nowrap">Durée totale de travail (plateau, HMC, attente)</td>
           <td ${TDT()}></td>
