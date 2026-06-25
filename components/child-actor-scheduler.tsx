@@ -813,7 +813,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     onArchiveChild={archiveChild}
     onAddGroup={addGroup} onUpdateGroup={updateGroup} onRemoveGroup={removeGroup} onUpdateRules={updateRules}
     onOpenDay={date => { setActiveDate(date); setView("shooting"); }}
-    onExportProjectPDF={(ids?: string[]) => exportProjectGlobalPDF(activeProject, ids)}
+    onExportProjectPDF={(ids?: string[], range?: { from: string; to: string }) => exportProjectGlobalPDF(activeProject, ids, range)}
     onExportChildDays={child => exportChildAllDays(activeProject, child)}
     onRename={renameProject}
     onDelete={() => { deleteProject(activeProject.id); setView("home"); loadProjects(); }}
@@ -1439,7 +1439,7 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
   onArchiveChild: (id: string, archived: boolean) => void;
   onAddGroup: (name: string) => void; onUpdateGroup: (id: string, d: any) => void; onRemoveGroup: (id: string) => void;
   onUpdateRules: (fn: (r: Rules) => Rules) => void; onOpenDay: (date: string) => void;
-  onExportProjectPDF: (selectedIds?: string[]) => void;
+  onExportProjectPDF: (selectedIds?: string[], dateRange?: { from: string; to: string }) => void;
   onExportChildDays: (child: Child) => void;
   onRename: (name: string) => Promise<void>;
   onDelete: () => void;
@@ -1451,7 +1451,7 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
   const [childModal, setChildModal] = useState<Child | "new" | null>(null);
   const [groupModal, setGroupModal] = useState<Group | "new" | null>(null);
   const [shareModal, setShareModal] = useState(false);
-  const [exportModal, setExportModal] = useState(false);
+  const [exportModal, setExportModal] = useState<false | { dateRange?: { from: string; to: string }; label?: string }>(false);
   const tabs = [{ id: "calendar", label: "📅" }, { id: "children", label: "👦" }, { id: "groups", label: "👥" }, { id: "settings", label: "⚙️" }];
   const tabLabels: Record<string, string> = { calendar: "Calendrier", children: "Enfants", groups: "Groupes", settings: "Paramètres" };
   return (
@@ -1469,13 +1469,20 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
       {/* Fix #5/#6: project export button */}
       {tab === "calendar" && (
         <div className="px-4 pt-3">
-          <button onClick={() => setExportModal(true)} className="w-full text-xs text-blue-400 border border-blue-800/60 px-3 py-2 rounded-lg">📄 Récap. global PDF</button>
+          <button onClick={() => setExportModal({})} className="w-full text-xs text-blue-400 border border-blue-800/60 px-3 py-2 rounded-lg">📄 Récap. global PDF</button>
         </div>
       )}
-      {exportModal && <SelectChildrenForExportModal project={project} onClose={() => setExportModal(false)} onConfirm={ids => onExportProjectPDF(ids)} />}
+      {exportModal && (
+        <SelectChildrenForExportModal
+          project={project}
+          rangeLabel={exportModal.label}
+          onClose={() => setExportModal(false)}
+          onConfirm={ids => onExportProjectPDF(ids, exportModal.dateRange)}
+        />
+      )}
 
       <div className="px-4 py-4">
-        {tab === "calendar" && <CalendarTab project={project} onOpenDay={onOpenDay} />}
+        {tab === "calendar" && <CalendarTab project={project} onOpenDay={onOpenDay} onExportWeek={(from, to, label) => setExportModal({ dateRange: { from, to }, label })} />}
         {tab === "children" && <ChildrenTab project={project} onAdd={() => setChildModal("new")} onEdit={c => setChildModal(c)} onRemove={onRemoveChild} onImport={onAddChildren} onArchive={onArchiveChild} onExportChildDays={onExportChildDays} />}
         {tab === "groups" && <GroupsTab project={project} onAdd={() => setGroupModal("new")} onRemove={onRemoveGroup} onUpdateGroup={onUpdateGroup} />}
         {tab === "settings" && <SettingsTab rules={project.rules} onUpdateRules={onUpdateRules} projectName={project.name} onRename={onRename} onDelete={onDelete} />}
@@ -1505,7 +1512,7 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
   );
 }
 
-function CalendarTab({ project, onOpenDay }: { project: Project; onOpenDay: (d: string) => void }) {
+function CalendarTab({ project, onOpenDay, onExportWeek }: { project: Project; onOpenDay: (d: string) => void; onExportWeek?: (from: string, to: string, label: string) => void }) {
   const [cur, setCur] = useState(() => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), 1); });
   const y = cur.getFullYear(), m = cur.getMonth();
   const firstDay = (new Date(y, m, 1).getDay() + 6) % 7, daysInMonth = new Date(y, m + 1, 0).getDate();
@@ -1513,6 +1520,22 @@ function CalendarTab({ project, onOpenDay }: { project: Project; onOpenDay: (d: 
   const MN = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
   const DN = ["L","M","M","J","V","S","D"];
   function ds(d: number) { return `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`; }
+  function fmtFR(s: string) { return new Date(s + "T12:00:00").toLocaleDateString("fr-FR", { day: "numeric", month: "short" }); }
+
+  // Calcule les semaines (du lundi au dimanche) couvertes par les cellules
+  // affichees : on regarde chaque ligne de la grille (7 cellules = 1 semaine)
+  // et on retient la 1ere et derniere date non-nulle.
+  const weeks: { rowStart: number; from: string; to: string; hasShoot: boolean }[] = [];
+  for (let rowStart = 0; rowStart < cells.length; rowStart += 7) {
+    const row = cells.slice(rowStart, rowStart + 7);
+    const days = row.filter((x): x is number => typeof x === "number");
+    if (days.length === 0) continue;
+    const from = ds(days[0]);
+    const to = ds(days[days.length - 1]);
+    const hasShoot = days.some(d => (project.shootingDays[ds(d)]?.child_ids?.length ?? 0) > 0);
+    weeks.push({ rowStart, from, to, hasShoot });
+  }
+
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
@@ -1520,19 +1543,40 @@ function CalendarTab({ project, onOpenDay }: { project: Project; onOpenDay: (d: 
         <h2 className="font-bold text-base" style={{ fontFamily: "Syne, sans-serif" }}>{MN[m]} {y}</h2>
         <button onClick={() => setCur(new Date(y, m + 1, 1))} className="text-slate-400 w-10 h-10 rounded-lg border border-slate-700 flex items-center justify-center text-lg">›</button>
       </div>
-      <div className="grid grid-cols-7 gap-1 mb-1">{DN.map((d, i) => <div key={i} className="text-center text-[10px] text-slate-500 py-1 uppercase tracking-wider">{d}</div>)}</div>
-      <div className="grid grid-cols-7 gap-1">
-        {cells.map((d, i) => {
-          if (!d) return <div key={i} />;
-          const s = ds(d);
-          const dayData = project.shootingDays[s];
-          const validChildIds = (dayData?.child_ids || []).filter(id => project.children.find(c => c.id === id));
-          const count = validChildIds.length, isShoot = count > 0, isToday = s === todayStr();
+      <div className="grid grid-cols-[1fr_auto] gap-1 mb-1">
+        <div className="grid grid-cols-7 gap-1">{DN.map((d, i) => <div key={i} className="text-center text-[10px] text-slate-500 py-1 uppercase tracking-wider">{d}</div>)}</div>
+        <div className="w-8" />
+      </div>
+      <div className="space-y-1">
+        {weeks.map(({ rowStart, from, to, hasShoot }, wi) => {
+          const row = cells.slice(rowStart, rowStart + 7);
+          const weekLabel = `Semaine du ${fmtFR(from)} au ${fmtFR(to)}`;
           return (
-            <button key={i} onClick={() => onOpenDay(s)} className={`rounded-xl py-2.5 text-sm transition-all ${isShoot ? "bg-blue-900/50 border border-blue-600 text-blue-200" : "bg-slate-900/40 border border-slate-800 text-slate-400"} ${isToday ? "ring-2 ring-blue-400" : ""}`}>
-              <div className="font-bold text-sm">{d}</div>
-              {isShoot && <div className="text-[9px] text-blue-400">{count}👦</div>}
-            </button>
+            <div key={wi} className="grid grid-cols-[1fr_auto] gap-1 items-stretch">
+              <div className="grid grid-cols-7 gap-1">
+                {row.map((d, i) => {
+                  if (!d) return <div key={i} />;
+                  const s = ds(d);
+                  const dayData = project.shootingDays[s];
+                  const validChildIds = (dayData?.child_ids || []).filter(id => project.children.find(c => c.id === id));
+                  const count = validChildIds.length, isShoot = count > 0, isToday = s === todayStr();
+                  return (
+                    <button key={i} onClick={() => onOpenDay(s)} className={`rounded-xl py-2.5 text-sm transition-all ${isShoot ? "bg-blue-900/50 border border-blue-600 text-blue-200" : "bg-slate-900/40 border border-slate-800 text-slate-400"} ${isToday ? "ring-2 ring-blue-400" : ""}`}>
+                      <div className="font-bold text-sm">{d}</div>
+                      {isShoot && <div className="text-[9px] text-blue-400">{count}👦</div>}
+                    </button>
+                  );
+                })}
+              </div>
+              <button
+                onClick={() => onExportWeek && hasShoot && onExportWeek(from, to, weekLabel)}
+                disabled={!onExportWeek || !hasShoot}
+                title={hasShoot ? `Exporter cette semaine` : `Aucune journée de tournage cette semaine`}
+                className={`w-8 rounded-xl text-xs flex items-center justify-center ${hasShoot ? "bg-blue-900/30 border border-blue-800/60 text-blue-300 hover:bg-blue-900/60" : "bg-slate-900/30 border border-slate-800/60 text-slate-700 cursor-not-allowed"}`}
+              >
+                📄
+              </button>
+            </div>
           );
         })}
       </div>
@@ -1541,8 +1585,10 @@ function CalendarTab({ project, onOpenDay }: { project: Project; onOpenDay: (d: 
 }
 
 // Fix #1 + #3 + #4: ChildrenTab with archive + per-child export
-export function SelectChildrenForExportModal({ project, onConfirm, onClose }: {
+export function SelectChildrenForExportModal({ project, rangeLabel, onConfirm, onClose }: {
   project: Project;
+  /** Optionnel : libelle de la periode (semaine du x au y) affiche en en-tete */
+  rangeLabel?: string;
   onConfirm: (ids: string[]) => void;
   onClose: () => void;
 }) {
@@ -1572,9 +1618,10 @@ export function SelectChildrenForExportModal({ project, onConfirm, onClose }: {
   }
 
   return (
-    <Modal title="Export PDF global — sélection" onClose={onClose}>
+    <Modal title={rangeLabel ? `Export PDF — ${rangeLabel}` : "Export PDF global — sélection"} onClose={onClose}>
       <div className="space-y-3">
-        <p className="text-xs text-slate-400">Sélectionne les enfants à inclure dans le récapitulatif.</p>
+        <p className="text-xs text-slate-400">Sélectionne les enfants à inclure dans le récapitulatif{rangeLabel ? "" : " global"}.</p>
+        {rangeLabel && <div className="bg-blue-900/30 border border-blue-700/60 rounded-lg px-3 py-2 text-xs text-blue-200">📅 Période restreinte : <b>{rangeLabel}</b></div>}
         <div className="flex items-center gap-2">
           <input
             type="text"

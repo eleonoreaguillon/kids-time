@@ -279,9 +279,15 @@ export function exportChildAllDays(project: Project, child: Child) {
 
 // PDF global du projet (un bloc par enfant, dates en colonnes, format DRIEETS)
 // selectedIds : si fourni, restreint aux enfants choisis.
-export function exportProjectGlobalPDF(project: Project, selectedIds?: string[]) {
-  const sortedDates = Object.keys(project.shootingDays).sort();
-  if (sortedDates.length === 0) { alert("Aucune journée de tournage dans ce projet."); return; }
+// dateRange : si fourni, restreint aux dates dans [from, to] (inclusives).
+export function exportProjectGlobalPDF(project: Project, selectedIds?: string[], dateRange?: { from: string; to: string }) {
+  // Ignore les journees sans aucun enfant assigne (jour cree puis vide), pour
+  // ne pas afficher des colonnes vides dans le PDF.
+  const sortedDates = Object.keys(project.shootingDays)
+    .filter(d => (project.shootingDays[d]?.child_ids?.length ?? 0) > 0)
+    .filter(d => !dateRange || (d >= dateRange.from && d <= dateRange.to))
+    .sort();
+  if (sortedDates.length === 0) { alert(dateRange ? "Aucune journée de tournage sur cette période." : "Aucune journée de tournage dans ce projet."); return; }
   const filterSet = selectedIds && selectedIds.length > 0 ? new Set(selectedIds) : null;
   const showAmpOver = project.rules.showAmplitudeOverage !== false;
 
