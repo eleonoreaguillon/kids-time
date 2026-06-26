@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { supabase } from "@/lib/supabase";
 import {
   AGE_BANDS, AGE_BAND_LABELS, ALL_ROLES, DEFAULT_NIGHT_LIMIT_BY_BAND, DEFAULT_RULES,
@@ -366,7 +366,41 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     await refreshActive();
   }
 
-  async function addChild(child: { firstName: string; lastName: string; dob: string; vacationPeriods: VacationPeriod[]; role: ChildRole | null; derogations?: Derogation[]; schoolTracking?: boolean }) {
+  // Helper : applique une liste de dates de tournage pour un enfant. Ajoute
+  // l'enfant aux journees demandees (en creant la journee si elle n'existe pas)
+  // et le retire des journees ou il etait mais qui ne sont plus selectionnees.
+  async function applyChildDates(childId: string, projAtStart: Project, selectedDates: string[], removeOthers: boolean) {
+    let proj = projAtStart;
+    const selectedSet = new Set(selectedDates);
+    // Ajout aux nouvelles dates
+    for (const date of selectedDates) {
+      const day = proj.shootingDays[date] ?? {
+        id: newId(),
+        project_id: proj.id,
+        date,
+        child_ids: [],
+        sessions: {},
+      };
+      const ids = day.child_ids || [];
+      if (ids.includes(childId)) continue;
+      const updated = { ...day, child_ids: [...ids, childId] };
+      proj = { ...proj, shootingDays: { ...proj.shootingDays, [date]: updated } };
+      await persistDay(updated);
+    }
+    // Retrait des anciennes dates non re-selectionnees (uniquement en mode edit)
+    if (removeOthers) {
+      for (const [date, day] of Object.entries(proj.shootingDays)) {
+        if (selectedSet.has(date)) continue;
+        const ids = day.child_ids || [];
+        if (!ids.includes(childId)) continue;
+        const updated = { ...day, child_ids: ids.filter(i => i !== childId) };
+        proj = { ...proj, shootingDays: { ...proj.shootingDays, [date]: updated } };
+        await persistDay(updated);
+      }
+    }
+  }
+
+  async function addChild(child: { firstName: string; lastName: string; dob: string; vacationPeriods: VacationPeriod[]; role: ChildRole | null; derogations?: Derogation[]; schoolTracking?: boolean; selectedDates?: string[] }) {
     if (!activeProject) return;
     const c: Child = {
       id: newId(),
@@ -382,6 +416,11 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     };
     setActiveAndCache(p => ({ ...p, children: [...p.children, c] }));
     await persistChild(c);
+    if (child.selectedDates && child.selectedDates.length > 0) {
+      // On reconstruit un projet "snapshot" qui inclut le nouvel enfant
+      const snap: Project = { ...activeProject, children: [...activeProject.children, c] };
+      await applyChildDates(c.id, snap, child.selectedDates, false);
+    }
   }
 
   async function addChildren(children: { firstName: string; lastName: string; dob: string; vacationPeriods: VacationPeriod[]; role: ChildRole | null; derogations?: Derogation[]; schoolTracking?: boolean }[]) {
@@ -402,7 +441,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     for (const c of created) await persistChild(c);
   }
 
-  async function updateChild(id: string, data: { firstName: string; lastName: string; dob: string; vacationPeriods: VacationPeriod[]; role: ChildRole | null; derogations?: Derogation[]; schoolTracking?: boolean }) {
+  async function updateChild(id: string, data: { firstName: string; lastName: string; dob: string; vacationPeriods: VacationPeriod[]; role: ChildRole | null; derogations?: Derogation[]; schoolTracking?: boolean; selectedDates?: string[] }) {
     let updated: Child | null = null;
     setActiveAndCache(p => {
       const children = p.children.map(c => {
@@ -422,6 +461,9 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
       return { ...p, children };
     });
     if (updated) await persistChild(updated);
+    if (data.selectedDates !== undefined && activeProject) {
+      await applyChildDates(id, activeProject, data.selectedDates, true);
+    }
   }
 
   async function archiveChild(id: string, archived: boolean) {
@@ -1499,7 +1541,7 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
       </div>
 
       {childModal !== null && (
-        <ChildFormModal child={childModal === "new" ? null : childModal}
+        <ChildFormModal child={childModal === "new" ? null : childModal} project={project}
           onSave={data => { childModal === "new" ? onAddChild(data) : onUpdateChild((childModal as Child).id, data); setChildModal(null); }}
           onClose={() => setChildModal(null)} />
       )}
@@ -2262,7 +2304,7 @@ function SettingsTab({ rules, onUpdateRules, projectName, onRename, onDelete }: 
   );
 }
 
-function ChildFormModal({ child, onSave, onClose }: { child: Child | null; onSave: (d: any) => void; onClose: () => void }) {
+function ChildFormModal({ child, project, onSave, onClose }: { child: Child | null; project: Project; onSave: (d: any) => void; onClose: () => void }) {
   const [firstName, setFirstName] = useState(child?.first_name ?? "");
   const [lastName, setLastName] = useState(child?.last_name ?? "");
   const [dob, setDob] = useState(child?.dob || "");
@@ -2274,12 +2316,33 @@ function ChildFormModal({ child, onSave, onClose }: { child: Child | null; onSav
   const [schoolTracking, setSchoolTracking] = useState<boolean>(child?.school_tracking ?? false);
   const [error, setError] = useState("");
 
+  // Dates de tournage : derive l'etat initial du calendrier
+  const initialDates = useMemo(() => {
+    if (!child) return new Set<string>();
+    return new Set(
+      Object.entries(project.shootingDays)
+        .filter(([, day]) => day.child_ids?.includes(child.id))
+        .map(([d]) => d)
+    );
+  }, [child, project.shootingDays]);
+  const [selectedDates, setSelectedDates] = useState<Set<string>>(initialDates);
+  const [showCalendar, setShowCalendar] = useState(false);
+  // Mois affiche dans le mini-calendrier
+  const [calMonth, setCalMonth] = useState(() => {
+    const n = new Date();
+    return new Date(n.getFullYear(), n.getMonth(), 1);
+  });
+
+  function toggleDate(d: string) {
+    setSelectedDates(s => { const n = new Set(s); n.has(d) ? n.delete(d) : n.add(d); return n; });
+  }
+
   function handleSave() {
     const fn = firstName.trim(), ln = lastName.trim();
     if (!fn || !ln) { setError("Le prénom et le nom sont obligatoires."); return; }
     if (!dob) { setError("La date de naissance est obligatoire."); return; }
     setError("");
-    onSave({ firstName: fn, lastName: ln, dob, vacationPeriods, role, derogations, schoolTracking });
+    onSave({ firstName: fn, lastName: ln, dob, vacationPeriods, role, derogations, schoolTracking, selectedDates: [...selectedDates] });
   }
 
   return (
@@ -2340,11 +2403,104 @@ function ChildFormModal({ child, onSave, onClose }: { child: Child | null; onSav
           </div>
           <div className="text-[10px] text-slate-500 mt-1">Sans dérogation, l&apos;alerte se déclenche à 20h00</div>
         </div>
+        {/* Dates de tournage (optionnel) */}
+        <div>
+          <label className="text-[10px] text-slate-400 uppercase tracking-wider block mb-2">
+            Dates de tournage <span className="text-slate-600 font-normal normal-case">(optionnel — pourra être modifié plus tard)</span>
+          </label>
+          {selectedDates.size > 0 && (
+            <div className="bg-blue-900/20 border border-blue-800/60 rounded-lg px-3 py-2 mb-2 text-xs text-blue-200">
+              📅 {selectedDates.size} date{selectedDates.size > 1 ? "s" : ""} sélectionnée{selectedDates.size > 1 ? "s" : ""}
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={() => setShowCalendar(v => !v)}
+            className="w-full text-xs text-slate-300 border border-slate-600 px-3 py-2 rounded-lg"
+          >
+            {showCalendar ? "✕ Fermer le calendrier" : "📅 Ouvrir le calendrier pour choisir des dates"}
+          </button>
+          {showCalendar && (
+            <ChildDatesPicker
+              calMonth={calMonth}
+              setCalMonth={setCalMonth}
+              project={project}
+              childIdBeingEdited={child?.id}
+              selectedDates={selectedDates}
+              onToggle={toggleDate}
+            />
+          )}
+          <div className="text-[10px] text-slate-500 mt-1">
+            Tu pourras toujours ajouter ou retirer des dates depuis l&apos;onglet Calendrier de la production.
+          </div>
+        </div>
+
         {error && <div className="text-xs text-red-400 bg-red-900/20 border border-red-800 rounded-lg px-3 py-2">{error}</div>}
         <div className="text-[10px] text-slate-500">Les champs <span className="text-red-400">*</span> sont obligatoires</div>
         <Btn className="w-full justify-center" onClick={handleSave}>{child ? "Enregistrer" : "Ajouter l'enfant"}</Btn>
       </div>
     </Modal>
+  );
+}
+
+function ChildDatesPicker({ calMonth, setCalMonth, project, childIdBeingEdited, selectedDates, onToggle }: {
+  calMonth: Date;
+  setCalMonth: (d: Date) => void;
+  project: Project;
+  childIdBeingEdited?: string;
+  selectedDates: Set<string>;
+  onToggle: (d: string) => void;
+}) {
+  const y = calMonth.getFullYear(), m = calMonth.getMonth();
+  const firstDay = (new Date(y, m, 1).getDay() + 6) % 7;
+  const daysInMonth = new Date(y, m + 1, 0).getDate();
+  const cells = [...Array(firstDay).fill(null), ...Array.from({ length: daysInMonth }, (_, i) => i + 1)];
+  const MN = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
+  const DN = ["L","M","M","J","V","S","D"];
+  function ds(d: number) { return `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`; }
+  return (
+    <div className="mt-2 bg-slate-900/40 border border-slate-700 rounded-xl p-3">
+      <div className="flex items-center justify-between mb-2">
+        <button type="button" onClick={() => setCalMonth(new Date(y, m - 1, 1))} className="text-slate-400 w-8 h-8 rounded-lg border border-slate-700 flex items-center justify-center">‹</button>
+        <div className="font-bold text-sm text-white" style={{ fontFamily: "Syne, sans-serif" }}>{MN[m]} {y}</div>
+        <button type="button" onClick={() => setCalMonth(new Date(y, m + 1, 1))} className="text-slate-400 w-8 h-8 rounded-lg border border-slate-700 flex items-center justify-center">›</button>
+      </div>
+      <div className="grid grid-cols-7 gap-1 mb-1">{DN.map((d, i) => <div key={i} className="text-center text-[9px] text-slate-500 py-0.5 uppercase tracking-wider">{d}</div>)}</div>
+      <div className="grid grid-cols-7 gap-1">
+        {cells.map((d, i) => {
+          if (!d) return <div key={i} />;
+          const s = ds(d);
+          const dayData = project.shootingDays[s];
+          // Compte les autres enfants deja sur cette journee (hors l'enfant en cours d'edition)
+          const others = (dayData?.child_ids || []).filter(id => id !== childIdBeingEdited && project.children.find(c => c.id === id));
+          const isShoot = others.length > 0;
+          const isSelected = selectedDates.has(s);
+          const isToday = s === todayStr();
+          return (
+            <button
+              key={i}
+              type="button"
+              onClick={() => onToggle(s)}
+              className={`rounded-lg py-2 text-xs transition-all ${
+                isSelected
+                  ? "bg-blue-700 border border-blue-400 text-white"
+                  : isShoot
+                    ? "bg-blue-900/40 border border-blue-800/60 text-blue-200"
+                    : "bg-slate-900/60 border border-slate-700 text-slate-400"
+              } ${isToday ? "ring-1 ring-blue-300" : ""}`}
+            >
+              <div className="font-bold text-xs">{d}</div>
+              {isShoot && <div className="text-[9px] text-blue-300 opacity-80">{others.length}👦</div>}
+              {isSelected && <div className="text-[9px] text-white">✓</div>}
+            </button>
+          );
+        })}
+      </div>
+      <div className="text-[10px] text-slate-500 mt-2 flex flex-wrap gap-3">
+        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 bg-blue-700 border border-blue-400 rounded"></span>Sélectionné</span>
+        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 bg-blue-900/40 border border-blue-800/60 rounded"></span>Autre tournage</span>
+      </div>
+    </div>
   );
 }
 
