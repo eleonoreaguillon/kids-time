@@ -219,12 +219,16 @@ export function exportDayBlankSheet(project: Project, dateStr: string) {
   if (w) { w.document.write(html); w.document.close(); setTimeout(() => w.print(), 500); }
 }
 
-// PDF "toutes les journees d'un enfant" — une ligne par jour
-export function exportChildAllDays(project: Project, child: Child) {
+// PDF "recapitulatif journees d'un enfant" — une ligne par jour
+// dateRanges : si fourni, restreint aux dates dans la reunion de ces plages
+// (chaque plage est { from, to } inclusive). Utile pour exporter une ou
+// plusieurs semaines specifiques.
+export function exportChildAllDays(project: Project, child: Child, dateRanges?: { from: string; to: string }[]) {
+  const inRanges = (d: string) => !dateRanges || dateRanges.length === 0 || dateRanges.some(r => d >= r.from && d <= r.to);
   const days = Object.entries(project.shootingDays)
-    .filter(([, day]) => day.child_ids?.includes(child.id))
+    .filter(([d, day]) => day.child_ids?.includes(child.id) && inRanges(d))
     .sort(([a], [b]) => a.localeCompare(b));
-  if (days.length === 0) { alert("Cet enfant n'a aucune journée enregistrée."); return; }
+  if (days.length === 0) { alert(dateRanges && dateRanges.length > 0 ? "Aucune journée pour cet enfant sur cette période." : "Cet enfant n'a aucune journée enregistrée."); return; }
 
   const showAmpOver = project.rules.showAmplitudeOverage !== false;
   const childTable = (dateStr: string, day: ShootingDay) => {
@@ -266,7 +270,7 @@ export function exportChildAllDays(project: Project, child: Child) {
   .footer{margin-top:20px;font-size:8px;color:#999;text-align:center}
   @media print{.back-btn{display:none}}</style></head><body>
   <button class="back-btn" onclick="window.close()">← Retour</button>
-  <h1>KidsTime — Journées de ${child.first_name} ${child.last_name}</h1>
+  <h1>KidsTime — Récap journées de ${child.first_name} ${child.last_name}</h1>
   <h2>${child.role ? ROLE_LABELS[child.role] + " · " : ""}${getAge(child.dob)} ans · Tranche ${AGE_BAND_LABELS[getAgeBand(child.dob)]} · ${project.name}</h2>
   <table><thead><tr>
     <th>Date</th><th>Période</th><th>Début</th><th>Fin</th><th>Amplitude</th><th>Travail / Max</th><th>🍽 Déjeuner</th>${child.school_tracking ? "<th>Suivi sco.</th>" : ""}<th>Pauses valides</th><th>Plages déjeuner / pauses${child.school_tracking ? " / sco." : ""}</th>

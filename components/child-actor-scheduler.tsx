@@ -814,7 +814,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     onAddGroup={addGroup} onUpdateGroup={updateGroup} onRemoveGroup={removeGroup} onUpdateRules={updateRules}
     onOpenDay={date => { setActiveDate(date); setView("shooting"); }}
     onExportProjectPDF={(ids?: string[], range?: { from: string; to: string }) => exportProjectGlobalPDF(activeProject, ids, range)}
-    onExportChildDays={child => exportChildAllDays(activeProject, child)}
+    onExportChildDays={(child, ranges) => exportChildAllDays(activeProject, child, ranges)}
     onRename={renameProject}
     onDelete={() => { deleteProject(activeProject.id); setView("home"); loadProjects(); }}
     onGenerateShareToken={() => generateShareToken(activeProject.id)}
@@ -1440,7 +1440,7 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
   onAddGroup: (name: string) => void; onUpdateGroup: (id: string, d: any) => void; onRemoveGroup: (id: string) => void;
   onUpdateRules: (fn: (r: Rules) => Rules) => void; onOpenDay: (date: string) => void;
   onExportProjectPDF: (selectedIds?: string[], dateRange?: { from: string; to: string }) => void;
-  onExportChildDays: (child: Child) => void;
+  onExportChildDays: (child: Child, dateRanges?: { from: string; to: string }[]) => void;
   onRename: (name: string) => Promise<void>;
   onDelete: () => void;
   onGenerateShareToken: () => Promise<string>;
@@ -1773,7 +1773,7 @@ function ChildDeleteConfirmModal({ child, onConfirm, onClose }: { child: Child; 
 function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, onExportChildDays }: {
   project: Project; onAdd: () => void; onEdit: (c: Child) => void; onRemove: (id: string) => void;
   onImport: (cs: any[]) => Promise<void>; onArchive: (id: string, archived: boolean) => void;
-  onExportChildDays: (child: Child) => void;
+  onExportChildDays: (child: Child, dateRanges?: { from: string; to: string }[]) => void;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [importMsg, setImportMsg] = useState("");
@@ -1783,6 +1783,7 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
   const [roleTab, setRoleTab] = useState<ChildRole | "all">("all");
   const [showArchived, setShowArchived] = useState(false);
   const [deletingChild, setDeletingChild] = useState<Child | null>(null);
+  const [exportingChild, setExportingChild] = useState<Child | null>(null);
 
   const activeChildren = project.children.filter(c => !c.archived);
   const archivedChildren = project.children.filter(c => c.archived);
@@ -1953,7 +1954,7 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
             <div className="flex gap-2 mt-2 ml-1">
               <button onClick={() => onEdit(c)} className="text-[10px] text-slate-400 border border-slate-700 px-2 py-1 rounded-lg">✏️ Modifier</button>
               {/* Fix #4: per-child export */}
-              <button onClick={() => onExportChildDays(c)} className="text-[10px] text-blue-400 border border-blue-800/60 px-2 py-1 rounded-lg">📄 Journées</button>
+              <button onClick={() => setExportingChild(c)} className="text-[10px] text-blue-400 border border-blue-800/60 px-2 py-1 rounded-lg">📄 Récap journées</button>
               {/* Fix #3: archive */}
               {!c.archived
                 ? <button onClick={() => onArchive(c.id, true)} className="text-[10px] text-amber-400 border border-amber-800/60 px-2 py-1 rounded-lg">📦 Archiver</button>
@@ -1971,7 +1972,116 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
           onClose={() => setDeletingChild(null)}
         />
       )}
+      {exportingChild && (
+        <ExportChildDaysModal
+          project={project}
+          child={exportingChild}
+          onConfirm={ranges => onExportChildDays(exportingChild, ranges)}
+          onClose={() => setExportingChild(null)}
+        />
+      )}
     </div>
+  );
+}
+
+// Modale qui propose d'exporter le recap journees d'un enfant : tout
+// d'un coup ou en limitant a une selection de semaines.
+function ExportChildDaysModal({ project, child, onConfirm, onClose }: {
+  project: Project;
+  child: Child;
+  onConfirm: (dateRanges?: { from: string; to: string }[]) => void;
+  onClose: () => void;
+}) {
+  const [mode, setMode] = useState<"all" | "weeks">("all");
+  // Calcule les semaines (lundi -> dimanche) qui contiennent au moins une
+  // journee de l'enfant.
+  function mondayOf(dateStr: string): Date {
+    const d = new Date(dateStr + "T12:00:00");
+    const day = (d.getDay() + 6) % 7; // 0 = lundi
+    d.setDate(d.getDate() - day);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+  function ymd(d: Date): string {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+  function fmtFR(d: Date): string {
+    return d.toLocaleDateString("fr-FR", { day: "numeric", month: "short" });
+  }
+  const childDays = Object.entries(project.shootingDays)
+    .filter(([, day]) => day.child_ids?.includes(child.id))
+    .map(([d]) => d)
+    .sort();
+  const weekMap = new Map<string, { from: string; to: string; count: number }>();
+  for (const d of childDays) {
+    const mon = mondayOf(d);
+    const key = ymd(mon);
+    if (!weekMap.has(key)) {
+      const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+      weekMap.set(key, { from: ymd(mon), to: ymd(sun), count: 0 });
+    }
+    weekMap.get(key)!.count++;
+  }
+  const weeks = [...weekMap.entries()].map(([key, w]) => ({ key, ...w })).sort((a, b) => a.from.localeCompare(b.from));
+  const [picked, setPicked] = useState<Set<string>>(new Set(weeks.map(w => w.key)));
+
+  function toggle(key: string) {
+    setPicked(s => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; });
+  }
+
+  const canConfirm = mode === "all" || picked.size > 0;
+  function handleConfirm() {
+    if (mode === "all") onConfirm(undefined);
+    else {
+      const ranges = weeks.filter(w => picked.has(w.key)).map(w => ({ from: w.from, to: w.to }));
+      onConfirm(ranges);
+    }
+    onClose();
+  }
+
+  return (
+    <Modal title={`Récap journées — ${child.first_name} ${child.last_name}`} onClose={onClose}>
+      <div className="space-y-4">
+        <p className="text-xs text-slate-400">
+          {childDays.length} journée{childDays.length > 1 ? "s" : ""} enregistrée{childDays.length > 1 ? "s" : ""} sur {weeks.length} semaine{weeks.length > 1 ? "s" : ""}.
+        </p>
+
+        <div className="space-y-2">
+          <label className={`flex items-center gap-2 p-3 rounded-xl border cursor-pointer ${mode === "all" ? "bg-blue-900/30 border-blue-600" : "bg-slate-900/40 border-slate-700"}`}>
+            <input type="radio" name="exp-mode" checked={mode === "all"} onChange={() => setMode("all")} className="accent-blue-500" />
+            <span className="text-sm text-white">Exporter toutes les journées</span>
+          </label>
+          <label className={`flex items-center gap-2 p-3 rounded-xl border cursor-pointer ${mode === "weeks" ? "bg-blue-900/30 border-blue-600" : "bg-slate-900/40 border-slate-700"}`}>
+            <input type="radio" name="exp-mode" checked={mode === "weeks"} onChange={() => setMode("weeks")} className="accent-blue-500" />
+            <span className="text-sm text-white">Choisir une ou plusieurs semaines</span>
+          </label>
+        </div>
+
+        {mode === "weeks" && (
+          <div className="space-y-1 max-h-72 overflow-y-auto bg-slate-900/40 border border-slate-700 rounded-xl p-2">
+            <div className="flex gap-2 mb-2">
+              <button onClick={() => setPicked(new Set(weeks.map(w => w.key)))} className="text-[10px] text-slate-300 border border-slate-600 px-2 py-1 rounded-lg">Tout cocher</button>
+              <button onClick={() => setPicked(new Set())} className="text-[10px] text-slate-400 border border-slate-700 px-2 py-1 rounded-lg">Tout décocher</button>
+            </div>
+            {weeks.map(w => (
+              <label key={w.key} className="flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-slate-800/40 rounded-lg">
+                <input type="checkbox" checked={picked.has(w.key)} onChange={() => toggle(w.key)} className="accent-blue-500 w-4 h-4" />
+                <span className="text-xs text-white flex-1">Semaine du {fmtFR(new Date(w.from + "T12:00:00"))} au {fmtFR(new Date(w.to + "T12:00:00"))}</span>
+                <span className="text-[10px] text-slate-500">{w.count} jour{w.count > 1 ? "s" : ""}</span>
+              </label>
+            ))}
+          </div>
+        )}
+
+        <div className="flex gap-2">
+          <Btn variant="ghost" className="flex-1" onClick={onClose}>Annuler</Btn>
+          <button onClick={handleConfirm} disabled={!canConfirm}
+            className={`flex-1 py-3 rounded-xl text-sm font-bold transition-colors ${canConfirm ? "bg-blue-700 hover:bg-blue-600 text-white" : "bg-slate-800 text-slate-600 cursor-not-allowed"}`}>
+            📄 Exporter
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
