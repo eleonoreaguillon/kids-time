@@ -89,7 +89,7 @@ export function exportDayToPDF(project: Project, dateStr: string) {
     const showSchool = child.school_tracking || (stats && stats.schoolMin > 0);
     return `<table><tr><th colspan="4">${child.first_name} ${child.last_name}${child.role ? ` — ${ROLE_LABELS[child.role as ChildRole]}` : ""} — ${getAge(child.dob)} ans (${band} ans) — ${vacation ? "Vacances" : "Scolaire"}</th></tr>
       <tr><td><b>Convocation</b><br>${session?.start_time ? formatTime(session.start_time) : "--"}</td><td><b>Fin</b><br>${session?.end_time ? formatTime(session.end_time) : "--"}</td><td><b>Amplitude</b><br>${stats ? formatMinutes(stats.amplitudeMin) : "--"}</td>${showAmpOver ? `<td><b>Max amplitude</b><br>${formatMinutes(maxAmp)}</td>` : `<td></td>`}</tr>
-      <tr><td><b>Travail total</b><br>${stats ? formatMinutes(stats.workMin) : "--"}</td><td><b>Max travail</b><br>${formatMinutes(maxWork)}</td><td><b>Dépass. travail</b><br><span class="${workOver > 0 ? "over" : "ok"}">${workOver > 0 ? formatMinutes(workOver) : "OK"}</span></td>${showAmpOver ? `<td><b>Dépass. amplitude</b><br><span class="${ampOver > 0 ? "over" : "ok"}">${ampOver > 0 ? formatMinutes(ampOver) : "OK"}</span></td>` : `<td></td>`}</tr>
+      <tr><td><b>Travail total</b><br>${stats ? formatMinutes(stats.workMin) : "--"}</td>${stats && stats.workMin > 0 ? `<td><b>Max travail</b><br>${formatMinutes(maxWork)}</td><td><b>Dépass. travail</b><br><span class="${workOver > 0 ? "over" : "ok"}">${workOver > 0 ? formatMinutes(workOver) : "OK"}</span></td>` : `<td></td><td></td>`}${showAmpOver ? `<td><b>Dépass. amplitude</b><br><span class="${ampOver > 0 ? "over" : "ok"}">${ampOver > 0 ? formatMinutes(ampOver) : "OK"}</span></td>` : `<td></td>`}</tr>
       <tr><td><b>🍽 Déjeuner</b><br>${stats ? formatMinutes(stats.dejeunerMin) : "--"}</td><td><b>Plages déjeuner</b><br>${dStr}</td><td><b>Pauses valides</b><br>${stats ? formatMinutes(stats.validBreakMin) : "--"}</td><td><b>Plages de pauses</b><br>${bStr}</td></tr>
       ${showSchool ? `<tr><td><b>Suivi scolaire</b><br>${stats ? formatMinutes(stats.schoolMin) : "--"}</td><td colspan="3"><b>Plages suivi scolaire</b><br>${sStr}</td></tr>` : ""}</table>`;
   };
@@ -251,7 +251,7 @@ export function exportChildAllDays(project: Project, child: Child, dateRanges?: 
       <td>${session?.start_time ? formatTime(session.start_time) : "--"}</td>
       <td>${session?.end_time ? formatTime(session.end_time) : "--"}</td>
       <td><span style="color:${!showAmpOver ? "inherit" : ampOver > 0 ? "#dc2626" : stats && stats.amplitudeMin === maxAmp ? "#ea580c" : "#16a34a"}">${stats ? formatMinutes(stats.amplitudeMin) : "--"}${showAmpOver ? ` / ${formatMinutes(maxAmp)}` : ""}</span></td>
-      <td><span style="color:${workOver > 0 ? "#dc2626" : "#16a34a"}">${stats ? formatMinutes(stats.workMin) : "--"} / ${formatMinutes(maxWork)}</span></td>
+      <td><span style="color:${workOver > 0 ? "#dc2626" : "#16a34a"}">${stats ? formatMinutes(stats.workMin) : "--"}${stats && stats.workMin > 0 ? ` / ${formatMinutes(maxWork)}` : ""}</span></td>
       <td>${stats ? formatMinutes(stats.dejeunerMin) : "--"}</td>
       ${child.school_tracking ? `<td>${stats ? formatMinutes(stats.schoolMin) : "--"}</td>` : ""}
       <td>${stats ? formatMinutes(stats.validBreakMin) : "--"}</td>
@@ -407,7 +407,7 @@ export function exportProjectGlobalPDF(project: Project, selectedIds?: string[],
           ${cells(d => `<b>${fmtHHMM(d.stats?.workMin ?? 0)}</b>`)}
         </tr>
         <tr><td ${TDL}>Heure de fin de journée</td><td ${TDT()}></td>${cells(d => d.session?.end_time ? formatTime(d.session.end_time) : "")}</tr>
-        <tr><td ${TDL}>Temps de travail autorisé</td><td ${TDT()}></td>${cells(d => fmtHHMM(d.maxWork))}</tr>
+        <tr><td ${TDL}>Temps de travail autorisé</td><td ${TDT()}></td>${cells(d => (d.stats?.workMin ?? 0) > 0 ? fmtHHMM(d.maxWork) : "")}</tr>
         <tr>
           <td ${TDL} style="text-align:left;padding:3px 6px;border:1px solid #ccc;font-size:8px;background:#fff5f5;color:#dc2626;white-space:nowrap">Dépassement temps de travail</td>
           <td ${TDT(totWorkOver > 0 ? "color:#dc2626" : "")}>${fmtHHMM(totWorkOver)}</td>
