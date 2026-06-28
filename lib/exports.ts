@@ -331,7 +331,13 @@ export function exportProjectGlobalPDF(project: Project, selectedIds?: string[],
     @media print{.back-btn{display:none}}
   </style></head><body>
   <button class="back-btn" onclick="window.close()">← Retour</button>
-  <h1>KidsTime — Récapitulatif global</h1>
+  <h1>KidsTime — ${(() => {
+    const fmt = (s: string) => new Date(s + "T12:00:00").toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" });
+    if (dateRange) return `Période du ${fmt(dateRange.from)} au ${fmt(dateRange.to)}`;
+    const first = sortedDates[0], last = sortedDates[sortedDates.length - 1];
+    if (first === last) return `Journée du ${fmt(first)}`;
+    return `Période du ${fmt(first)} au ${fmt(last)}`;
+  })()}</h1>
   <h2>${project.name} · Généré le ${new Date().toLocaleDateString("fr-FR")}</h2>`;
 
   for (const child of sortByRoleThenAlpha(project.children.filter(c => !c.archived && (!filterSet || filterSet.has(c.id))))) {
