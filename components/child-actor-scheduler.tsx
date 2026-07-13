@@ -827,12 +827,23 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
   // Corrige le TYPE d'un evenement (ex : "pause" saisi par erreur au lieu de
   // "dejeuner"). Autorise meme si la session est terminee (status "done") : le
   // statut courant n'est recalcule que si la session est encore en cours.
+  // La duree d'une pause/dejeuner/suivi scolaire est comptabilisee par
+  // computeSessionStats() en fonction du type de l'evenement de FIN (voir
+  // lib/helpers.ts) : on met donc aussi a jour l'evenement pair (debut<->fin,
+  // adjacent dans le tableau) pour que les chronos suivent le changement.
   async function editEventType(dateStr: string, childId: string, eventIndex: number, newType: SessionEvent["type"]) {
     const day = activeProject!.shootingDays[dateStr]; if (!day) return;
     const sessions = { ...(day.sessions || {}) };
     const s = { ...sessions[childId] }; if (!s?.events?.[eventIndex]) return;
     const events = [...s.events];
+    const isStart = events[eventIndex].type.endsWith("_start");
+    const family = newType.replace(/_(start|end)$/, "");
     events[eventIndex] = { ...events[eventIndex], type: newType };
+    const partnerIdx = isStart ? eventIndex + 1 : eventIndex - 1;
+    const partner = events[partnerIdx];
+    if (partner && partner.type.endsWith(isStart ? "_end" : "_start")) {
+      events[partnerIdx] = { ...partner, type: `${family}_${isStart ? "end" : "start"}` as SessionEvent["type"] };
+    }
     s.events = events;
     if (s.status !== "done") {
       const last = events[events.length - 1];
@@ -3155,6 +3166,7 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
               <div className="text-xs text-slate-400">
                 À <b className="text-white">{formatTime(ev.time)}</b>, quelle était réellement l&apos;action pour <b className="text-white">{child.first_name} {child.last_name}</b> ?
               </div>
+              <div className="text-[10px] text-slate-500">Le début et la fin correspondants sont corrigés ensemble, pour que les temps (travail, déjeuner…) soient recalculés correctement.</div>
               <div className="grid grid-cols-3 gap-2">
                 {options.map(o => {
                   const sel = o.type === ev.type;
