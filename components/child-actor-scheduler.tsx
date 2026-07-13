@@ -1556,7 +1556,7 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
       )}
 
       <div className="px-4 py-4">
-        {tab === "calendar" && <CalendarTab project={project} onOpenDay={onOpenDay} onExportWeek={(from, to, label) => setExportModal({ dateRange: { from, to }, label })} />}
+        {tab === "calendar" && <CalendarTab project={project} onOpenDay={onOpenDay} onExportRange={(from, to, label) => setExportModal({ dateRange: { from, to }, label })} />}
         {tab === "children" && <ChildrenTab project={project} onAdd={() => setChildModal("new")} onEdit={c => setChildModal(c)} onRemove={onRemoveChild} onImport={onAddChildren} onArchive={onArchiveChild} onExportChildDays={onExportChildDays} />}
         {tab === "groups" && <GroupsTab project={project} onAdd={() => setGroupModal("new")} onRemove={onRemoveGroup} onUpdateGroup={onUpdateGroup} />}
         {tab === "settings" && <SettingsTab rules={project.rules} onUpdateRules={onUpdateRules} projectName={project.name} onRename={onRename} onDelete={onDelete} />}
@@ -1586,8 +1586,14 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
   );
 }
 
-function CalendarTab({ project, onOpenDay, onExportWeek }: { project: Project; onOpenDay: (d: string) => void; onExportWeek?: (from: string, to: string, label: string) => void }) {
+function CalendarTab({ project, onOpenDay, onExportRange }: { project: Project; onOpenDay: (d: string) => void; onExportRange?: (from: string, to: string, label: string) => void }) {
   const [cur, setCur] = useState(() => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), 1); });
+  // Mode "période" : clic sur une 1ere date = debut, clic sur une 2eme = fin
+  // (peut couvrir plusieurs mois grace a la navigation ‹ ›, l'etat persiste
+  // car le composant ne se demonte pas en changeant de mois).
+  const [rangeMode, setRangeMode] = useState(false);
+  const [rangeStart, setRangeStart] = useState<string | null>(null);
+  const [rangeEnd, setRangeEnd] = useState<string | null>(null);
   const y = cur.getFullYear(), m = cur.getMonth();
   const firstDay = (new Date(y, m, 1).getDay() + 6) % 7, daysInMonth = new Date(y, m + 1, 0).getDate();
   const cells = [...Array(firstDay).fill(null), ...Array.from({ length: daysInMonth }, (_, i) => i + 1)];
@@ -1596,61 +1602,63 @@ function CalendarTab({ project, onOpenDay, onExportWeek }: { project: Project; o
   function ds(d: number) { return `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`; }
   function fmtFR(s: string) { return new Date(s + "T12:00:00").toLocaleDateString("fr-FR", { day: "numeric", month: "short" }); }
 
-  // Calcule les semaines (du lundi au dimanche) couvertes par les cellules
-  // affichees : on regarde chaque ligne de la grille (7 cellules = 1 semaine)
-  // et on retient la 1ere et derniere date non-nulle.
-  const weeks: { rowStart: number; from: string; to: string; hasShoot: boolean }[] = [];
-  for (let rowStart = 0; rowStart < cells.length; rowStart += 7) {
-    const row = cells.slice(rowStart, rowStart + 7);
-    const days = row.filter((x): x is number => typeof x === "number");
-    if (days.length === 0) continue;
-    const from = ds(days[0]);
-    const to = ds(days[days.length - 1]);
-    const hasShoot = days.some(d => (project.shootingDays[ds(d)]?.child_ids?.length ?? 0) > 0);
-    weeks.push({ rowStart, from, to, hasShoot });
+  function exitRangeMode() { setRangeMode(false); setRangeStart(null); setRangeEnd(null); }
+
+  function handleDayClick(s: string) {
+    if (!rangeMode) { onOpenDay(s); return; }
+    if (!rangeStart || rangeEnd) { setRangeStart(s); setRangeEnd(null); return; }
+    if (s < rangeStart) { setRangeEnd(rangeStart); setRangeStart(s); }
+    else { setRangeEnd(s); }
+  }
+
+  function confirmRange() {
+    if (!rangeStart || !onExportRange) return;
+    const to = rangeEnd || rangeStart;
+    const label = rangeStart === to ? `Journée du ${fmtFR(rangeStart)}` : `Période du ${fmtFR(rangeStart)} au ${fmtFR(to)}`;
+    onExportRange(rangeStart, to, label);
+    exitRangeMode();
   }
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-3">
         <button onClick={() => setCur(new Date(y, m - 1, 1))} className="text-slate-400 w-10 h-10 rounded-lg border border-slate-700 flex items-center justify-center text-lg">‹</button>
         <h2 className="font-bold text-base" style={{ fontFamily: "Syne, sans-serif" }}>{MN[m]} {y}</h2>
         <button onClick={() => setCur(new Date(y, m + 1, 1))} className="text-slate-400 w-10 h-10 rounded-lg border border-slate-700 flex items-center justify-center text-lg">›</button>
       </div>
-      <div className="grid grid-cols-[1fr_auto] gap-1 mb-1">
-        <div className="grid grid-cols-7 gap-1">{DN.map((d, i) => <div key={i} className="text-center text-[10px] text-slate-500 py-1 uppercase tracking-wider">{d}</div>)}</div>
-        <div className="w-8" />
-      </div>
-      <div className="space-y-1">
-        {weeks.map(({ rowStart, from, to, hasShoot }, wi) => {
-          const row = cells.slice(rowStart, rowStart + 7);
-          const weekLabel = `Semaine du ${fmtFR(from)} au ${fmtFR(to)}`;
-          return (
-            <div key={wi} className="grid grid-cols-[1fr_auto] gap-1 items-stretch">
-              <div className="grid grid-cols-7 gap-1">
-                {row.map((d, i) => {
-                  if (!d) return <div key={i} />;
-                  const s = ds(d);
-                  const dayData = project.shootingDays[s];
-                  const validChildIds = (dayData?.child_ids || []).filter(id => project.children.find(c => c.id === id));
-                  const count = validChildIds.length, isShoot = count > 0, isToday = s === todayStr();
-                  return (
-                    <button key={i} onClick={() => onOpenDay(s)} className={`rounded-xl py-2.5 text-sm transition-all ${isShoot ? "bg-blue-900/50 border border-blue-600 text-blue-200" : "bg-slate-900/40 border border-slate-800 text-slate-400"} ${isToday ? "ring-2 ring-blue-400" : ""}`}>
-                      <div className="font-bold text-sm">{d}</div>
-                      {isShoot && <div className="text-[9px] text-blue-400">{count}👦</div>}
-                    </button>
-                  );
-                })}
+
+      {onExportRange && (
+        <div className="mb-3">
+          {!rangeMode ? (
+            <button onClick={() => setRangeMode(true)} className="w-full text-xs text-blue-400 border border-blue-800/60 px-3 py-2 rounded-lg">📅 Exporter une période — choisir les dates</button>
+          ) : (
+            <div className="bg-blue-950/30 border border-blue-800/60 rounded-xl px-3 py-2.5 space-y-2">
+              <div className="text-xs text-blue-300">
+                {!rangeStart ? "Touche la date de début de la période." : !rangeEnd ? `Début : ${fmtFR(rangeStart)} — touche la date de fin (ou retouche-la pour un seul jour).` : `Période : ${fmtFR(rangeStart)} → ${fmtFR(rangeEnd)}`}
               </div>
-              <button
-                onClick={() => onExportWeek && hasShoot && onExportWeek(from, to, weekLabel)}
-                disabled={!onExportWeek || !hasShoot}
-                title={hasShoot ? `Exporter cette semaine` : `Aucune journée de tournage cette semaine`}
-                className={`w-8 rounded-xl text-xs flex items-center justify-center ${hasShoot ? "bg-blue-900/30 border border-blue-800/60 text-blue-300 hover:bg-blue-900/60" : "bg-slate-900/30 border border-slate-800/60 text-slate-700 cursor-not-allowed"}`}
-              >
-                📄
-              </button>
+              <div className="flex gap-2">
+                <button onClick={exitRangeMode} className="flex-1 text-xs text-slate-400 border border-slate-700 px-3 py-2 rounded-lg">Annuler</button>
+                {rangeStart && <button onClick={confirmRange} className="flex-1 text-xs bg-blue-700 hover:bg-blue-600 text-white px-3 py-2 rounded-lg font-semibold">📄 Exporter{rangeEnd ? "" : " ce jour"}</button>}
+              </div>
             </div>
+          )}
+        </div>
+      )}
+
+      <div className="grid grid-cols-7 gap-1 mb-1">{DN.map((d, i) => <div key={i} className="text-center text-[10px] text-slate-500 py-1 uppercase tracking-wider">{d}</div>)}</div>
+      <div className="grid grid-cols-7 gap-1">
+        {cells.map((d, i) => {
+          if (!d) return <div key={i} />;
+          const s = ds(d);
+          const dayData = project.shootingDays[s];
+          const validChildIds = (dayData?.child_ids || []).filter(id => project.children.find(c => c.id === id));
+          const count = validChildIds.length, isShoot = count > 0, isToday = s === todayStr();
+          const inRange = rangeMode && !!rangeStart && (rangeEnd ? (s >= rangeStart && s <= rangeEnd) : s === rangeStart);
+          return (
+            <button key={i} onClick={() => handleDayClick(s)} className={`rounded-xl py-2.5 text-sm transition-all ${inRange ? "bg-blue-600 border border-blue-400 text-white" : isShoot ? "bg-blue-900/50 border border-blue-600 text-blue-200" : "bg-slate-900/40 border border-slate-800 text-slate-400"} ${isToday ? "ring-2 ring-blue-400" : ""}`}>
+              <div className="font-bold text-sm">{d}</div>
+              {isShoot && <div className={`text-[9px] ${inRange ? "text-blue-100" : "text-blue-400"}`}>{count}👦</div>}
+            </button>
           );
         })}
       </div>
