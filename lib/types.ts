@@ -31,6 +31,9 @@ export interface Child {
   archived?: boolean;
   derogations?: Derogation[];
   school_tracking?: boolean;
+  /** Periode (debut/fin) sur laquelle le suivi scolaire s'applique. Si absente
+   *  alors que school_tracking est actif, s'applique sur toute la duree (retro-compat). */
+  school_period?: VacationPeriod | null;
 }
 
 export interface Group {

@@ -65,6 +65,15 @@ export function isVacation(child: Child, dateStr: string): boolean {
   return (child.vacation_periods || []).some(p => dateStr >= p.start && dateStr <= p.end);
 }
 
+// Le suivi scolaire n'est propose/affiche que si le flag est actif ET (aucune
+// periode definie [retro-compat] OU la date tombe dans la periode).
+export function isSchoolTrackingActive(child: Child, dateStr: string): boolean {
+  if (!child.school_tracking) return false;
+  const p = child.school_period;
+  if (!p || !p.start || !p.end) return true;
+  return dateStr >= p.start && dateStr <= p.end;
+}
+
 export function todayStr(): string {
   return new Date().toISOString().slice(0, 10);
 }

@@ -11,7 +11,7 @@ import {
 } from "@/lib/types";
 import {
   computeSessionStats, detectRole, formatMinutes, formatTime, getAge, getAgeBand,
-  guessColumn, isMinor, isVacation, isoToTimeStr, normalize, normalizeRules, nowISO,
+  guessColumn, isMinor, isSchoolTrackingActive, isVacation, isoToTimeStr, normalize, normalizeRules, nowISO,
   parseExcelDate, sortByRoleThenAlpha, splitFullName, timeStrToISO, todayStr,
 } from "@/lib/helpers";
 import {
@@ -26,7 +26,7 @@ import {
 export {
   AGE_BAND_LABELS, ALL_ROLES, ROLE_COLORS, ROLE_LABELS,
   computeSessionStats, formatMinutes, formatTime, getAge, getAgeBand, isMinor,
-  isVacation, normalizeRules, sortByRoleThenAlpha,
+  isSchoolTrackingActive, isVacation, normalizeRules, sortByRoleThenAlpha,
   buildExportRows, exportChildAllDays, exportDayToPDF, exportProjectGlobalPDF,
 };
 export type { AgeBand, Child, ChildRole, Derogation, Group, Period, Project, Rules,
@@ -400,7 +400,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     }
   }
 
-  async function addChild(child: { firstName: string; lastName: string; dob: string; vacationPeriods: VacationPeriod[]; role: ChildRole | null; derogations?: Derogation[]; schoolTracking?: boolean; selectedDates?: string[] }) {
+  async function addChild(child: { firstName: string; lastName: string; dob: string; vacationPeriods: VacationPeriod[]; role: ChildRole | null; derogations?: Derogation[]; schoolTracking?: boolean; schoolPeriod?: VacationPeriod | null; selectedDates?: string[] }) {
     if (!activeProject) return;
     const c: Child = {
       id: newId(),
@@ -412,6 +412,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
       role: child.role ?? undefined,
       derogations: child.derogations || [],
       school_tracking: child.schoolTracking ?? false,
+      school_period: child.schoolPeriod ?? null,
       archived: false,
     };
     setActiveAndCache(p => ({ ...p, children: [...p.children, c] }));
@@ -441,7 +442,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     for (const c of created) await persistChild(c);
   }
 
-  async function updateChild(id: string, data: { firstName: string; lastName: string; dob: string; vacationPeriods: VacationPeriod[]; role: ChildRole | null; derogations?: Derogation[]; schoolTracking?: boolean; selectedDates?: string[] }) {
+  async function updateChild(id: string, data: { firstName: string; lastName: string; dob: string; vacationPeriods: VacationPeriod[]; role: ChildRole | null; derogations?: Derogation[]; schoolTracking?: boolean; schoolPeriod?: VacationPeriod | null; selectedDates?: string[] }) {
     let updated: Child | null = null;
     setActiveAndCache(p => {
       const children = p.children.map(c => {
@@ -455,6 +456,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
           role: data.role ?? undefined,
           derogations: data.derogations || [],
           school_tracking: data.schoolTracking ?? false,
+          school_period: data.schoolPeriod ?? null,
         };
         return updated;
       });
@@ -555,6 +557,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
       child_role: (c.role ?? null) as string | null,
       derogations: c.derogations || [],
       school_tracking: !!c.school_tracking,
+      school_period: c.school_period || null,
       archived: !!c.archived,
     };
   }
@@ -657,7 +660,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
       let effectiveKind: "travail" | "dejeuner" | "school" = kind;
       if (kind === "school") {
         const child = activeProject!.children.find(c => c.id === childId);
-        if (!child?.school_tracking) effectiveKind = "travail";
+        if (!child || !isSchoolTrackingActive(child, dateStr)) effectiveKind = "travail";
       }
       if (effectiveKind === "dejeuner") {
         sessions[childId] = { start_time: time, events: [{ type: "dejeuner_start", time }], status: "dejeuner" };
@@ -690,7 +693,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
       let eff = target;
       if (eff === "school") {
         const child = activeProject!.children.find(c => c.id === childId);
-        if (!child?.school_tracking) eff = "travail";
+        if (!child || !isSchoolTrackingActive(child, dateStr)) eff = "travail";
       }
 
       // Cas 1 : la journee n'a pas encore demarre pour cet enfant
@@ -758,7 +761,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
       let effectiveKind = kind;
       if (effectiveKind === "school") {
         const child = activeProject!.children.find(c => c.id === childId);
-        if (!child?.school_tracking) effectiveKind = "travail";
+        if (!child || !isSchoolTrackingActive(child, dateStr)) effectiveKind = "travail";
       }
       let newStatus: Session["status"] = "working";
       if (effectiveKind === "dejeuner") { events.push({ type: "dejeuner_start", time }); newStatus = "dejeuner"; }
@@ -779,7 +782,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
       // Pour school_start, on filtre aussi sur le flag de l'enfant
       if (eventType === "school_start") {
         const child = activeProject!.children.find(c => c.id === childId);
-        if (!child?.school_tracking) continue;
+        if (!child || !isSchoolTrackingActive(child, dateStr)) continue;
       }
       // "pause_end" sert aussi à reprendre depuis un déjeuner ou un suivi scolaire (smart resume)
       if (eventType === "pause_end" && s.status !== "paused" && s.status !== "dejeuner" && s.status !== "school") continue;
@@ -2343,6 +2346,7 @@ function ChildFormModal({ child, project, onSave, onClose }: { child: Child | nu
   const [derogations, setDerogations] = useState<Derogation[]>(child?.derogations || []);
   const [newDerog, setNewDerog] = useState({ date: "", end_time: "" });
   const [schoolTracking, setSchoolTracking] = useState<boolean>(child?.school_tracking ?? false);
+  const [schoolPeriod, setSchoolPeriod] = useState<VacationPeriod>(child?.school_period || { start: "", end: "" });
   const [error, setError] = useState("");
 
   // Dates de tournage : derive l'etat initial du calendrier
@@ -2371,7 +2375,8 @@ function ChildFormModal({ child, project, onSave, onClose }: { child: Child | nu
     if (!fn || !ln) { setError("Le prénom et le nom sont obligatoires."); return; }
     if (!dob) { setError("La date de naissance est obligatoire."); return; }
     setError("");
-    onSave({ firstName: fn, lastName: ln, dob, vacationPeriods, role, derogations, schoolTracking, selectedDates: [...selectedDates] });
+    const period = schoolTracking && schoolPeriod.start && schoolPeriod.end ? schoolPeriod : null;
+    onSave({ firstName: fn, lastName: ln, dob, vacationPeriods, role, derogations, schoolTracking, schoolPeriod: period, selectedDates: [...selectedDates] });
   }
 
   return (
@@ -2411,6 +2416,14 @@ function ChildFormModal({ child, project, onSave, onClose }: { child: Child | nu
             {schoolTracking ? "✓ Activé" : "Désactivé"}
           </button>
           <div className="text-[10px] text-slate-500">Active le bouton 📚 Suivi scolaire pour cet enfant pendant le tournage. Inclus dans l&apos;amplitude, hors temps de travail et hors pause.</div>
+          {schoolTracking && (
+            <div className="flex gap-2 items-end mt-2">
+              <TextInput label="Début" type="date" value={schoolPeriod.start} onChange={e => setSchoolPeriod(p => ({ ...p, start: e.target.value }))} />
+              <TextInput label="Fin" type="date" value={schoolPeriod.end} onChange={e => setSchoolPeriod(p => ({ ...p, end: e.target.value }))} />
+              {(schoolPeriod.start || schoolPeriod.end) && <button onClick={() => setSchoolPeriod({ start: "", end: "" })} className="text-red-400 w-6 h-6 flex items-center justify-center flex-shrink-0" title="Effacer la période">✕</button>}
+            </div>
+          )}
+          {schoolTracking && <div className="text-[10px] text-slate-500">Laisser vide pour appliquer sur toute la durée du projet, sinon le bouton 📚 n&apos;apparaîtra que sur les journées comprises dans cette période.</div>}
         </div>
         {/* Dérogations horaires (travail après 20h) */}
         <div>
@@ -2722,7 +2735,7 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
 
   function toggleSelect(id: string) { setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }); }
   const selList = [...selected];
-  const childHasSchool = (id: string) => project.children.find(c => c.id === id)?.school_tracking === true;
+  const childHasSchool = (id: string) => { const c = project.children.find(c => c.id === id); return !!c && isSchoolTrackingActive(c, dateStr); };
   const canStart      = selList.some(id => !sessions[id]?.start_time);
   const canTransition = selList.some(id => sessions[id]?.start_time && sessions[id]?.status !== "done");
   const schoolAvail   = selList.some(id => childHasSchool(id));
@@ -3070,13 +3083,13 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
       {/* Expanded details */}
       {isExpanded && (
         <div className="px-3 pb-3 border-t border-slate-700/50 pt-3 space-y-3">
-          {!session?.start_time && <SingleStartButton onStart={onStart} dateStr={dateStr} schoolAvailable={!!child.school_tracking} />}
+          {!session?.start_time && <SingleStartButton onStart={onStart} dateStr={dateStr} schoolAvailable={isSchoolTrackingActive(child, dateStr)} />}
           {session?.status === "done" && <div className="text-center text-emerald-400 text-sm font-semibold">✓ Journée terminée</div>}
 
           {stats && (
             <>
               <div className="grid grid-cols-3 gap-2">
-                {([{ l: "Travail", v: stats.workMin, max: maxWork, crit: workCrit }, { l: "🍽 Déjeuner", v: stats.dejeunerMin }, { l: "Pauses val.", v: stats.validBreakMin, sub: `tot.${formatMinutes(stats.breakMin)}` }, ...(child.school_tracking || stats.schoolMin > 0 ? [{ l: "📚 Suivi sco.", v: stats.schoolMin }] : []), { l: "Amplitude", v: stats.amplitudeMin, max: maxAmplitude, crit: ampCrit, warn: ampWarn }] as any[]).map(({ l, v, max, sub, crit, warn }) => (
+                {([{ l: "Travail", v: stats.workMin, max: maxWork, crit: workCrit }, { l: "🍽 Déjeuner", v: stats.dejeunerMin }, { l: "Pauses val.", v: stats.validBreakMin, sub: `tot.${formatMinutes(stats.breakMin)}` }, ...(isSchoolTrackingActive(child, dateStr) || stats.schoolMin > 0 ? [{ l: "📚 Suivi sco.", v: stats.schoolMin }] : []), { l: "Amplitude", v: stats.amplitudeMin, max: maxAmplitude, crit: ampCrit, warn: ampWarn }] as any[]).map(({ l, v, max, sub, crit, warn }) => (
                   <div key={l} className={`rounded-lg p-2 text-center border ${crit ? "bg-red-900/30 border-red-800" : warn ? "bg-orange-900/30 border-orange-700" : "bg-slate-800/50 border-slate-700"}`}>
                     <div className={`text-base font-bold ${crit ? "text-red-400" : warn ? "text-orange-400" : "text-white"}`}>{formatMinutes(v)}</div>
                     <div className="text-[9px] text-slate-400">{l}</div>
@@ -3158,7 +3171,7 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
         const options: { type: SessionEvent["type"]; icon: string; label: string }[] = [
           { type: isEnd ? "pause_end" : "pause_start", icon: "⏸", label: "Pause" },
           { type: isEnd ? "dejeuner_end" : "dejeuner_start", icon: "🍽", label: "Déjeuner" },
-          ...(child.school_tracking ? [{ type: (isEnd ? "school_end" : "school_start") as SessionEvent["type"], icon: "📚", label: "Suivi scolaire" }] : []),
+          ...(isSchoolTrackingActive(child, dateStr) ? [{ type: (isEnd ? "school_end" : "school_start") as SessionEvent["type"], icon: "📚", label: "Suivi scolaire" }] : []),
         ];
         return (
           <Modal title="Corriger le type de cette action" onClose={() => setEditTypeIdx(null)}>
@@ -3200,7 +3213,7 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
           title="Suivant"
           childCount={1}
           dateStr={dateStr}
-          schoolAvailable={!!child.school_tracking}
+          schoolAvailable={isSchoolTrackingActive(child, dateStr)}
           availableTargets={targets}
           onConfirm={(timeISO, target) => { onTransitionOne(timeISO, target); setIndivModal(null); }}
           onClose={() => setIndivModal(null)} />;

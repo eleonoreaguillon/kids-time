@@ -4,7 +4,7 @@ import { useState, useEffect, use } from "react";
 import { createClient } from "@supabase/supabase-js";
 import {
   ROLE_LABELS, ROLE_COLORS, ALL_ROLES, AGE_BAND_LABELS,
-  getAge, getAgeBand, isMinor, formatMinutes, formatTime, isVacation,
+  getAge, getAgeBand, isMinor, formatMinutes, formatTime, isSchoolTrackingActive, isVacation,
   computeSessionStats, buildExportRows,
   exportDayToPDF, exportChildAllDays,
   exportProjectGlobalPDF,
@@ -66,7 +66,7 @@ function ChildDetailRow({ row, dateStr }: { row: any; dateStr: string }) {
             <div className="text-slate-400">Amplitude <span className={`font-mono ${ampOver > 0 ? "text-red-400 font-bold" : stats.amplitudeMin === maxAmp ? "text-orange-400" : "text-orange-300"}`}>{formatMinutes(stats.amplitudeMin)}</span> <span className="text-slate-600">/ {formatMinutes(maxAmp)}</span></div>
             <div className="text-slate-400">🍽 Déjeuner <span className="text-yellow-300 font-mono">{formatMinutes(stats.dejeunerMin)}</span></div>
             <div className="text-slate-400">Pauses valides <span className="text-green-300 font-mono">{formatMinutes(stats.validBreakMin)}</span></div>
-            {(child.school_tracking || stats.schoolMin > 0) && <div className="text-slate-400">📚 Suivi scolaire <span className="text-indigo-300 font-mono">{formatMinutes(stats.schoolMin)}</span></div>}
+            {(isSchoolTrackingActive(child, dateStr) || stats.schoolMin > 0) && <div className="text-slate-400">📚 Suivi scolaire <span className="text-indigo-300 font-mono">{formatMinutes(stats.schoolMin)}</span></div>}
           </div>
           {(workOver > 0 || ampOver > 0) && (
             <div className="flex gap-2 flex-wrap pt-1">
