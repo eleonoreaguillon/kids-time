@@ -189,6 +189,7 @@ function AuthPage({ onAuth }: { onAuth: (s: any) => void }) {
 
 function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }) {
   const [view, setView] = useState<"home" | "project" | "shooting">("home");
+  const [projectTab, setProjectTab] = useState<"calendar" | "children" | "groups" | "settings">("calendar");
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [activeDate, setActiveDate] = useState<string | null>(null);
@@ -884,6 +885,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
 
   if (view === "home") return <><Fonts /><OfflineBanner /><HomeView projects={projects} userEmail={session.user.email} onCreate={createProject} onOpen={openProject} onSignOut={onSignOut} /></>;
   if (view === "project" && activeProject) return <><Fonts /><OfflineBanner /><ProjectView project={activeProject}
+    tab={projectTab} onTabChange={setProjectTab}
     onBack={() => { setView("home"); loadProjects(); }}
     onAddChild={addChild} onAddChildren={addChildren} onUpdateChild={updateChild} onRemoveChild={removeChild}
     onArchiveChild={archiveChild}
@@ -920,7 +922,8 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     onEditEndTime={(cid, t) => editEndTime(activeDate, cid, t)}
     onExportPDF={() => exportDayToPDF(activeProject, activeDate)}
     onPrintBlank={() => exportDayBlankSheet(activeProject, activeDate)}
-    onChangeDate={(d: string) => setActiveDate(d)} /></>;
+    onChangeDate={(d: string) => setActiveDate(d)}
+    onSwitchTab={(t) => { setProjectTab(t); setView("project"); }} /></>;
   return null;
 }
 
@@ -1516,8 +1519,11 @@ function RgpdDeleteModal({ onClose, userEmail }: { onClose: () => void; userEmai
   );
 }
 
-function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild, onRemoveChild, onArchiveChild, onAddGroup, onUpdateGroup, onRemoveGroup, onUpdateRules, onOpenDay, onExportProjectPDF, onExportChildDays, onRename, onDelete, onGenerateShareToken, onSetSharePassword, onRevokeShareToken }: {
-  project: Project; onBack: () => void;
+function ProjectView({ project, tab, onTabChange, onBack, onAddChild, onAddChildren, onUpdateChild, onRemoveChild, onArchiveChild, onAddGroup, onUpdateGroup, onRemoveGroup, onUpdateRules, onOpenDay, onExportProjectPDF, onExportChildDays, onRename, onDelete, onGenerateShareToken, onSetSharePassword, onRevokeShareToken }: {
+  project: Project;
+  tab: "calendar" | "children" | "groups" | "settings";
+  onTabChange: (t: "calendar" | "children" | "groups" | "settings") => void;
+  onBack: () => void;
   onAddChild: (c: any) => void; onAddChildren: (cs: any[]) => Promise<void>;
   onUpdateChild: (id: string, d: any) => void; onRemoveChild: (id: string) => void;
   onArchiveChild: (id: string, archived: boolean) => void;
@@ -1531,7 +1537,7 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
   onSetSharePassword: (pwd: string | null) => Promise<void>;
   onRevokeShareToken: () => Promise<void>;
 }) {
-  const [tab, setTab] = useState<"calendar" | "children" | "groups" | "settings">("calendar");
+  const setTab = onTabChange;
   const [childModal, setChildModal] = useState<Child | "new" | null>(null);
   const [groupModal, setGroupModal] = useState<Group | "new" | null>(null);
   const [shareModal, setShareModal] = useState(false);
@@ -2819,7 +2825,7 @@ function ManageChildrenList({ project, childIds, onToggleChild, onPendingUncheck
   );
 }
 
-function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSession, onCancelSession, onApplyEvent, onResumeAs, onResumeOneAs, onTransition, onTransitionOne, onCancelLastEvent, onEndSessions, onReopenSession, onToggleChild, onAddGroup, onRemoveGroup, onEditEventTime, onEditEventType, onDeleteEvent, onEditStartTime, onEditEndTime, onExportPDF, onPrintBlank, onChangeDate }: {
+function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSession, onCancelSession, onApplyEvent, onResumeAs, onResumeOneAs, onTransition, onTransitionOne, onCancelLastEvent, onEndSessions, onReopenSession, onToggleChild, onAddGroup, onRemoveGroup, onEditEventTime, onEditEventType, onDeleteEvent, onEditStartTime, onEditEndTime, onExportPDF, onPrintBlank, onChangeDate, onSwitchTab }: {
   project: Project; dateStr: string; onBack: () => void;
   onStartSessions: (cids: string[], t?: string, kind?: "travail" | "dejeuner" | "school") => void;
   onStartSession: (cid: string, t?: string, kind?: "travail" | "dejeuner" | "school") => void;
@@ -2838,6 +2844,7 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
   onExportPDF: () => void;
   onPrintBlank: () => void;
   onChangeDate: (dateStr: string) => void;
+  onSwitchTab: (t: "calendar" | "children" | "groups" | "settings") => void;
 }) {
   const [, setTick] = useState(0);
   const [addingChildren, setAdding] = useState(false);
@@ -2912,7 +2919,7 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
     : allTargets;
 
   return (
-    <div className="min-h-screen bg-[#080d16] text-white pb-4" style={{ fontFamily: "'DM Mono', monospace" }}>
+    <div className="min-h-screen bg-[#080d16] text-white pb-20" style={{ fontFamily: "'DM Mono', monospace" }}>
       {/* Fix #1: compact sticky header */}
       <div className="sticky top-0 z-10 bg-[#080d16] border-b border-slate-800 px-4 py-3">
         <div className="flex items-center gap-3 mb-2">
@@ -3068,6 +3075,21 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
           setActionModal(null);
         }}
         onClose={() => setActionModal(null)} />}
+
+      {/* Tab bar : meme que sur la vue projet, permet de basculer directement */}
+      <div className="fixed bottom-0 left-0 right-0 bg-[#0c1420] border-t border-slate-800 flex pb-safe-bottom">
+        {([
+          { id: "calendar", label: "📅", name: "Calendrier" },
+          { id: "children", label: "👦", name: "Enfants" },
+          { id: "groups",   label: "👥", name: "Groupes" },
+          { id: "settings", label: "⚙️", name: "Paramètres" },
+        ] as const).map(t => (
+          <button key={t.id} onClick={() => onSwitchTab(t.id)} className="flex-1 py-3 flex flex-col items-center gap-0.5 text-slate-600 hover:text-slate-300 transition-colors">
+            <span className="text-lg">{t.label}</span>
+            <span className="text-[9px] uppercase tracking-wider">{t.name}</span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
