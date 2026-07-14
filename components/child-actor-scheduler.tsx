@@ -919,7 +919,8 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     onEditStartTime={(cid, t) => editStartTime(activeDate, cid, t)}
     onEditEndTime={(cid, t) => editEndTime(activeDate, cid, t)}
     onExportPDF={() => exportDayToPDF(activeProject, activeDate)}
-    onPrintBlank={() => exportDayBlankSheet(activeProject, activeDate)} /></>;
+    onPrintBlank={() => exportDayBlankSheet(activeProject, activeDate)}
+    onChangeDate={(d: string) => setActiveDate(d)} /></>;
   return null;
 }
 
@@ -2818,7 +2819,7 @@ function ManageChildrenList({ project, childIds, onToggleChild, onPendingUncheck
   );
 }
 
-function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSession, onCancelSession, onApplyEvent, onResumeAs, onResumeOneAs, onTransition, onTransitionOne, onCancelLastEvent, onEndSessions, onReopenSession, onToggleChild, onAddGroup, onRemoveGroup, onEditEventTime, onEditEventType, onDeleteEvent, onEditStartTime, onEditEndTime, onExportPDF, onPrintBlank }: {
+function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSession, onCancelSession, onApplyEvent, onResumeAs, onResumeOneAs, onTransition, onTransitionOne, onCancelLastEvent, onEndSessions, onReopenSession, onToggleChild, onAddGroup, onRemoveGroup, onEditEventTime, onEditEventType, onDeleteEvent, onEditStartTime, onEditEndTime, onExportPDF, onPrintBlank, onChangeDate }: {
   project: Project; dateStr: string; onBack: () => void;
   onStartSessions: (cids: string[], t?: string, kind?: "travail" | "dejeuner" | "school") => void;
   onStartSession: (cid: string, t?: string, kind?: "travail" | "dejeuner" | "school") => void;
@@ -2836,6 +2837,7 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
   onDeleteEvent: (cid: string, idx: number) => void;
   onExportPDF: () => void;
   onPrintBlank: () => void;
+  onChangeDate: (dateStr: string) => void;
 }) {
   const [, setTick] = useState(0);
   const [addingChildren, setAdding] = useState(false);
@@ -2847,12 +2849,31 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
   const [pendingUncheck, setPendingUncheck] = useState<Child | null>(null);
 
   useEffect(() => { const t = setInterval(() => setTick(n => n + 1), 15000); return () => clearInterval(t); }, []);
+  // Quand on change de jour via les fleches, on remet a zero la selection, la
+  // recherche et la carte depliee — sinon elles resteraient du jour precedent.
+  useEffect(() => {
+    setSelected(new Set());
+    setExpandedId(null);
+    setSearch("");
+    setRoleTab("all");
+    setActionModal(null);
+  }, [dateStr]);
 
   const day = project.shootingDays[dateStr] || { child_ids: [], sessions: {} };
   const childIds = day.child_ids || [];
   const sessions = day.sessions || {};
   const rules = project.rules;
   const dateLabel = new Date(dateStr + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  // Journees de tournage triees (celles qui ont au moins un enfant) pour la
+  // navigation < / > entre journees
+  const sortedShootingDates = Object.entries(project.shootingDays)
+    .filter(([, day]) => (day.child_ids?.length ?? 0) > 0)
+    .map(([d]) => d)
+    .sort();
+  const currentIdx = sortedShootingDates.indexOf(dateStr);
+  const prevDate = currentIdx > 0 ? sortedShootingDates[currentIdx - 1] : null;
+  const nextDate = currentIdx >= 0 && currentIdx < sortedShootingDates.length - 1 ? sortedShootingDates[currentIdx + 1] : null;
+  const fmtShort = (d: string) => new Date(d + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "short", day: "numeric", month: "short" });
   const childrenInDay = sortByRoleThenAlpha(childIds.map(id => project.children.find(c => c.id === id)).filter(Boolean) as Child[]);
   const rolesPresent = ALL_ROLES.filter(r => childrenInDay.some(c => c.role === r));
 
@@ -2895,12 +2916,24 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
       {/* Fix #1: compact sticky header */}
       <div className="sticky top-0 z-10 bg-[#080d16] border-b border-slate-800 px-4 py-3">
         <div className="flex items-center gap-3 mb-2">
-          <button onClick={onBack} className="text-slate-400 w-8 h-8 flex items-center justify-center rounded-lg border border-slate-700 flex-shrink-0">←</button>
+          <button onClick={onBack} className="text-slate-400 w-8 h-8 flex items-center justify-center rounded-lg border border-slate-700 flex-shrink-0" title="Retour au calendrier">←</button>
+          <button
+            onClick={() => prevDate && onChangeDate(prevDate)}
+            disabled={!prevDate}
+            title={prevDate ? `Journée précédente : ${fmtShort(prevDate)}` : "Pas de journée précédente"}
+            className={`w-7 h-8 flex items-center justify-center rounded-lg border flex-shrink-0 ${prevDate ? "border-blue-800/60 text-blue-300 hover:bg-blue-900/30" : "border-slate-800 text-slate-700 cursor-not-allowed"}`}
+          >‹</button>
           <div className="flex-1 min-w-0">
             <h1 className="text-sm font-extrabold capitalize truncate" style={{ fontFamily: "Syne, sans-serif" }}>{dateLabel}</h1>
             {/* Fix #7: selection count always visible */}
             <div className="text-xs text-slate-400">{childIds.length} enfant(s) · <span className={selected.size > 0 ? "text-blue-400 font-semibold" : ""}>{selected.size} sélectionné(s)</span></div>
           </div>
+          <button
+            onClick={() => nextDate && onChangeDate(nextDate)}
+            disabled={!nextDate}
+            title={nextDate ? `Journée suivante : ${fmtShort(nextDate)}` : "Pas de journée suivante"}
+            className={`w-7 h-8 flex items-center justify-center rounded-lg border flex-shrink-0 ${nextDate ? "border-blue-800/60 text-blue-300 hover:bg-blue-900/30" : "border-slate-800 text-slate-700 cursor-not-allowed"}`}
+          >›</button>
           <button onClick={onPrintBlank} className="text-xs text-slate-300 border border-slate-600 px-2 py-1.5 rounded-lg flex-shrink-0" title="Fiche papier vierge à remplir au stylo">🖨</button>
           <button onClick={onExportPDF} className="text-xs text-blue-400 border border-blue-800/60 px-2 py-1.5 rounded-lg flex-shrink-0">PDF</button>
         </div>
