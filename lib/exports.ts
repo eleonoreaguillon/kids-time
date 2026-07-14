@@ -22,6 +22,7 @@ import {
   formatTime,
   getAge,
   getAgeBand,
+  isSchoolTrackingActive,
   isVacation,
   sortByRoleThenAlpha,
 } from "./helpers";
@@ -86,7 +87,7 @@ export function exportDayToPDF(project: Project, dateStr: string) {
     const bStr = stats?.breakSlots.filter((b: any) => b.valid && b.kind === "pause").map((b: any) => `${formatTime(b.start)}-${formatTime(b.end)} (${formatMinutes(b.durationMin)})`).join("<br>") || "--";
     const dStr = stats?.breakSlots.filter((b: any) => b.kind === "dejeuner").map((b: any) => `${formatTime(b.start)}-${formatTime(b.end)} (${formatMinutes(b.durationMin)})`).join("<br>") || "--";
     const sStr = stats?.breakSlots.filter((b: any) => b.kind === "school").map((b: any) => `${formatTime(b.start)}-${formatTime(b.end)} (${formatMinutes(b.durationMin)})`).join("<br>") || "--";
-    const showSchool = child.school_tracking || (stats && stats.schoolMin > 0);
+    const showSchool = isSchoolTrackingActive(child, dateStr) || (stats && stats.schoolMin > 0);
     return `<table><tr><th colspan="4">${child.first_name} ${child.last_name}${child.role ? ` — ${ROLE_LABELS[child.role as ChildRole]}` : ""} — ${getAge(child.dob)} ans (${band} ans) — ${vacation ? "Vacances" : "Scolaire"}</th></tr>
       <tr><td><b>Convocation</b><br>${session?.start_time ? formatTime(session.start_time) : "--"}</td><td><b>Fin</b><br>${session?.end_time ? formatTime(session.end_time) : "--"}</td><td><b>Amplitude</b><br>${stats ? formatMinutes(stats.amplitudeMin) : "--"}</td>${showAmpOver ? `<td><b>Max amplitude</b><br>${formatMinutes(maxAmp)}</td>` : `<td></td>`}</tr>
       <tr><td><b>Travail total</b><br>${stats ? formatMinutes(stats.workMin) : "--"}</td>${stats && stats.workMin > 0 ? `<td><b>Max travail</b><br>${formatMinutes(maxWork)}</td><td><b>Dépass. travail</b><br><span class="${workOver > 0 ? "over" : "ok"}">${workOver > 0 ? formatMinutes(workOver) : "OK"}</span></td>` : `<td></td><td></td>`}${showAmpOver ? `<td><b>Dépass. amplitude</b><br><span class="${ampOver > 0 ? "over" : "ok"}">${ampOver > 0 ? formatMinutes(ampOver) : "OK"}</span></td>` : `<td></td>`}</tr>
@@ -231,6 +232,9 @@ export function exportChildAllDays(project: Project, child: Child, dateRanges?: 
   if (days.length === 0) { alert(dateRanges && dateRanges.length > 0 ? "Aucune journée pour cet enfant sur cette période." : "Cet enfant n'a aucune journée enregistrée."); return; }
 
   const showAmpOver = project.rules.showAmplitudeOverage !== false;
+  // Colonne "Suivi scolaire" affichee si le suivi est actif pour au moins un
+  // des jours exportes (respecte la periode eventuellement definie).
+  const schoolColRelevant = days.some(([d]) => isSchoolTrackingActive(child, d));
   const childTable = (dateStr: string, day: ShootingDay) => {
     const session = day.sessions?.[child.id];
     const vacation = isVacation(child, dateStr);
@@ -253,9 +257,9 @@ export function exportChildAllDays(project: Project, child: Child, dateRanges?: 
       <td><span style="color:${!showAmpOver ? "inherit" : ampOver > 0 ? "#dc2626" : stats && stats.amplitudeMin === maxAmp ? "#ea580c" : "#16a34a"}">${stats ? formatMinutes(stats.amplitudeMin) : "--"}${showAmpOver ? ` / ${formatMinutes(maxAmp)}` : ""}</span></td>
       <td><span style="color:${workOver > 0 ? "#dc2626" : "#16a34a"}">${stats ? formatMinutes(stats.workMin) : "--"}${stats && stats.workMin > 0 ? ` / ${formatMinutes(maxWork)}` : ""}</span></td>
       <td>${stats ? formatMinutes(stats.dejeunerMin) : "--"}</td>
-      ${child.school_tracking ? `<td>${stats ? formatMinutes(stats.schoolMin) : "--"}</td>` : ""}
+      ${schoolColRelevant ? `<td>${stats ? formatMinutes(stats.schoolMin) : "--"}</td>` : ""}
       <td>${stats ? formatMinutes(stats.validBreakMin) : "--"}</td>
-      <td style="font-size:8px">${dStr ? dStr + " | " : ""}${bStr}${child.school_tracking && stats && stats.schoolMin > 0 ? " | " + sStr : ""}</td>
+      <td style="font-size:8px">${dStr ? dStr + " | " : ""}${bStr}${schoolColRelevant && stats && stats.schoolMin > 0 ? " | " + sStr : ""}</td>
     </tr>`;
   };
 
@@ -273,7 +277,7 @@ export function exportChildAllDays(project: Project, child: Child, dateRanges?: 
   <h1>KidsTime — Récap journées de ${child.first_name} ${child.last_name}</h1>
   <h2>${child.role ? ROLE_LABELS[child.role] + " · " : ""}${getAge(child.dob)} ans · Tranche ${AGE_BAND_LABELS[getAgeBand(child.dob)]} · ${project.name}</h2>
   <table><thead><tr>
-    <th>Date</th><th>Période</th><th>Début</th><th>Fin</th><th>Amplitude</th><th>Travail / Max</th><th>🍽 Déjeuner</th>${child.school_tracking ? "<th>Suivi sco.</th>" : ""}<th>Pauses valides</th><th>Plages déjeuner / pauses${child.school_tracking ? " / sco." : ""}</th>
+    <th>Date</th><th>Période</th><th>Début</th><th>Fin</th><th>Amplitude</th><th>Travail / Max</th><th>🍽 Déjeuner</th>${schoolColRelevant ? "<th>Suivi sco.</th>" : ""}<th>Pauses valides</th><th>Plages déjeuner / pauses${schoolColRelevant ? " / sco." : ""}</th>
   </tr></thead><tbody>`;
   for (const [dateStr, day] of days) { html += childTable(dateStr, day); }
   html += `</tbody></table>
@@ -406,7 +410,7 @@ export function exportProjectGlobalPDF(project: Project, selectedIds?: string[],
         <tr><td ${TDL}>Heure de convocation</td><td ${TDT()}></td>${cells(d => d.session?.start_time ? formatTime(d.session.start_time) : "")}</tr>
         <tr><td ${TDL}>Durée de pause déjeuner</td><td ${TDT()}></td>${cells(d => fmtHHMM(d.stats?.dejeunerMin ?? 0))}</tr>
         <tr><td ${TDL}>Durée des autres pauses</td><td ${TDT()}></td>${cells(d => fmtHHMM(d.stats?.validBreakMin ?? 0))}</tr>
-        ${child.school_tracking || totSchool > 0 ? `<tr><td ${TDL}>Suivi scolaire</td><td ${TDT()}>${fmtHHMM(totSchool)}</td>${cells(d => fmtHHMM(d.stats?.schoolMin ?? 0))}</tr>` : ""}
+        ${childDates.some(d => isSchoolTrackingActive(child, d)) || totSchool > 0 ? `<tr><td ${TDL}>Suivi scolaire</td><td ${TDT()}>${fmtHHMM(totSchool)}</td>${cells(d => fmtHHMM(d.stats?.schoolMin ?? 0))}</tr>` : ""}
         <tr>
           <td ${TDL} style="text-align:left;padding:3px 6px;border:1px solid #ccc;font-size:8px;background:#f4f6fb;font-weight:bold;white-space:nowrap">Durée totale de travail (plateau, HMC, attente)</td>
           <td ${TDT()}></td>
