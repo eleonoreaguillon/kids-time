@@ -253,11 +253,13 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
       setLoading(false);
       return;
     }
-    const { data, error } = await supabase.from("projects").select("*").eq("user_id", userId).order("created_at");
+    // Grace aux RLS mises a jour, un simple select renvoie a la fois mes
+    // propres projets ET ceux ou je suis collaborateur.
+    const { data, error } = await supabase.from("projects").select("*").order("created_at");
     if (error || !data) {
       setProjects(ktLoadProjectList(userId));
     } else {
-      const list = data as Project[];
+      const list = (data as any[]).map(p => ({ ...p, is_owner: p.user_id === userId })) as Project[];
       setProjects(list);
       ktCacheProjectList(userId, list);
     }
@@ -292,7 +294,8 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
       delete projAny.share_password;
       // Retro-compat : ajoute les bandes d age manquantes dans les regles
       if (projAny.rules) projAny.rules = normalizeRules(projAny.rules);
-      const full = { ...projAny, share_password_set, children: mappedChildren, groups: groups || [], shootingDays } as Project;
+      const is_owner = projAny.user_id === userId;
+      const full = { ...projAny, share_password_set, is_owner, children: mappedChildren, groups: groups || [], shootingDays } as Project;
       ktCacheProject(full);
       return full;
     } catch (e) {
@@ -1201,7 +1204,13 @@ function HomeView({ projects, userEmail, onCreate, onOpen, onSignOut }: { projec
             <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-2">Mes productions</div>
             {projects.map(p => (
               <div key={p.id} className="flex items-center gap-3 bg-slate-900/50 border border-slate-700 rounded-xl px-4 py-4 active:bg-slate-800 transition-colors cursor-pointer" onClick={() => onOpen(p.id)}>
-                <div className="flex-1"><div className="font-bold text-white" style={{ fontFamily: "Syne, sans-serif" }}>{p.name}</div><div className="text-xs text-slate-500">{new Date(p.created_at).toLocaleDateString("fr-FR")}</div></div>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <div className="font-bold text-white" style={{ fontFamily: "Syne, sans-serif" }}>{p.name}</div>
+                    {p.is_owner === false && <span className="text-[9px] px-1.5 py-0.5 rounded-full border border-blue-700 bg-blue-900/40 text-blue-300 font-semibold">Collab</span>}
+                  </div>
+                  <div className="text-xs text-slate-500">{new Date(p.created_at).toLocaleDateString("fr-FR")}</div>
+                </div>
                 <span className="text-slate-600 text-sm">→</span>
               </div>
             ))}
@@ -1534,9 +1543,11 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
       <div className="sticky top-0 z-10 bg-[#080d16] border-b border-slate-800 px-4 py-3 flex items-center gap-3">
         <button onClick={onBack} className="text-slate-400 hover:text-white text-sm w-8 h-8 flex items-center justify-center rounded-lg border border-slate-700">←</button>
         <h1 className="text-base font-extrabold truncate flex-1" style={{ fontFamily: "Syne, sans-serif" }}>{project.name}</h1>
-        <button onClick={() => setShareModal(true)} className="text-xs text-blue-400 border border-blue-800/60 px-3 py-1.5 rounded-lg hover:bg-blue-900/30 transition-colors flex items-center gap-1">
-          🔗 <span className="hidden sm:inline">Partager</span>
-        </button>
+        {project.is_owner !== false && (
+          <button onClick={() => setShareModal(true)} className="text-xs text-blue-400 border border-blue-800/60 px-3 py-1.5 rounded-lg hover:bg-blue-900/30 transition-colors flex items-center gap-1">
+            🔗 <span className="hidden sm:inline">Partager</span>
+          </button>
+        )}
       </div>
       {shareModal && <ShareModal project={project} onClose={() => setShareModal(false)} onGenerate={onGenerateShareToken} onSetPassword={onSetSharePassword} onRevoke={onRevokeShareToken} />}
 
@@ -1559,7 +1570,7 @@ function ProjectView({ project, onBack, onAddChild, onAddChildren, onUpdateChild
         {tab === "calendar" && <CalendarTab project={project} onOpenDay={onOpenDay} onExportRange={(from, to, label) => setExportModal({ dateRange: { from, to }, label })} />}
         {tab === "children" && <ChildrenTab project={project} onAdd={() => setChildModal("new")} onEdit={c => setChildModal(c)} onRemove={onRemoveChild} onImport={onAddChildren} onArchive={onArchiveChild} onExportChildDays={onExportChildDays} />}
         {tab === "groups" && <GroupsTab project={project} onAdd={() => setGroupModal("new")} onRemove={onRemoveGroup} onUpdateGroup={onUpdateGroup} />}
-        {tab === "settings" && <SettingsTab rules={project.rules} onUpdateRules={onUpdateRules} projectName={project.name} onRename={onRename} onDelete={onDelete} />}
+        {tab === "settings" && <SettingsTab rules={project.rules} onUpdateRules={onUpdateRules} project={project} onRename={onRename} onDelete={onDelete} isOwner={project.is_owner !== false} />}
       </div>
 
       {/* Fix #1: bottom tab bar for mobile */}
@@ -2231,7 +2242,8 @@ function GroupsTab({ project, onAdd, onRemove, onUpdateGroup }: { project: Proje
   );
 }
 
-function SettingsTab({ rules, onUpdateRules, projectName, onRename, onDelete }: { rules: Rules; onUpdateRules: (fn: (r: Rules) => Rules) => void; projectName: string; onRename: (name: string) => Promise<void>; onDelete: () => void }) {
+function SettingsTab({ rules, onUpdateRules, project, onRename, onDelete, isOwner }: { rules: Rules; onUpdateRules: (fn: (r: Rules) => Rules) => void; project: Project; onRename: (name: string) => Promise<void>; onDelete: () => void; isOwner: boolean }) {
+  const projectName = project.name;
   const [confirmName, setConfirmName] = useState("");
   const [nameDraft, setNameDraft] = useState(projectName);
   const [renameMsg, setRenameMsg] = useState<"" | "saving" | "saved" | "error">("");
@@ -2322,23 +2334,130 @@ function SettingsTab({ rules, onUpdateRules, projectName, onRename, onDelete }: 
         </label>
       </div>
 
-      {/* Zone de danger */}
-      <div className="mt-6 border border-red-900/60 rounded-2xl p-4 bg-red-950/20">
-        <h2 className="font-bold text-sm text-red-400 mb-1" style={{ fontFamily: "Syne, sans-serif" }}>⚠️ Zone de danger</h2>
-        <p className="text-xs text-slate-400 mb-3">Pour supprimer cette production, tapez son nom exact ci-dessous puis confirmez.</p>
-        <input
-          className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-white text-sm mb-3 focus:outline-none focus:border-red-500 placeholder:text-slate-600"
-          placeholder={projectName}
-          value={confirmName}
-          onChange={e => setConfirmName(e.target.value)}
-        />
-        <button
-          disabled={confirmName !== projectName}
-          onClick={() => { if (confirmName === projectName) onDelete(); }}
-          className={`w-full py-2.5 rounded-xl text-sm font-semibold transition-colors ${confirmName === projectName ? "bg-red-700 hover:bg-red-600 text-white" : "bg-slate-800 text-slate-600 cursor-not-allowed"}`}
-        >
-          Supprimer définitivement
-        </button>
+      {/* Collaborateurs */}
+      <CollaboratorsSection projectId={project.id} isOwner={isOwner} />
+
+      {/* Zone de danger — proprietaire uniquement */}
+      {isOwner ? (
+        <div className="mt-6 border border-red-900/60 rounded-2xl p-4 bg-red-950/20">
+          <h2 className="font-bold text-sm text-red-400 mb-1" style={{ fontFamily: "Syne, sans-serif" }}>⚠️ Zone de danger</h2>
+          <p className="text-xs text-slate-400 mb-3">Pour supprimer cette production, tapez son nom exact ci-dessous puis confirmez.</p>
+          <input
+            className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-white text-sm mb-3 focus:outline-none focus:border-red-500 placeholder:text-slate-600"
+            placeholder={projectName}
+            value={confirmName}
+            onChange={e => setConfirmName(e.target.value)}
+          />
+          <button
+            disabled={confirmName !== projectName}
+            onClick={() => { if (confirmName === projectName) onDelete(); }}
+            className={`w-full py-2.5 rounded-xl text-sm font-semibold transition-colors ${confirmName === projectName ? "bg-red-700 hover:bg-red-600 text-white" : "bg-slate-800 text-slate-600 cursor-not-allowed"}`}
+          >
+            Supprimer définitivement
+          </button>
+        </div>
+      ) : (
+        <div className="mt-6 bg-slate-900/40 border border-slate-700 rounded-xl px-4 py-3 text-xs text-slate-400">
+          Tu es collaborateur·rice sur ce projet. Seule la personne qui l&apos;a créé peut le supprimer ou gérer le partage.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CollaboratorsSection({ projectId, isOwner }: { projectId: string; isOwner: boolean }) {
+  const [list, setList] = useState<{ user_id: string; email: string; invited_at: string }[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [email, setEmail] = useState("");
+  const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function reload() {
+    setLoading(true);
+    const { data } = await supabase.rpc("list_collaborators", { p_project_id: projectId });
+    setList((data || []) as any);
+    setLoading(false);
+  }
+  useEffect(() => { reload(); }, [projectId]);
+
+  async function handleInvite() {
+    const clean = email.trim();
+    if (!clean) return;
+    setBusy(true); setMsg(null);
+    const { data, error } = await supabase.rpc("invite_collaborator", { p_project_id: projectId, p_email: clean });
+    setBusy(false);
+    if (error) { setMsg({ kind: "err", text: error.message }); return; }
+    if (data?.error === "no_account") { setMsg({ kind: "err", text: "Aucun compte KidsTime avec cet e-mail. Demande à la personne de créer d'abord son compte." }); return; }
+    if (data?.error === "self")       { setMsg({ kind: "err", text: "Tu ne peux pas t'inviter toi-même." }); return; }
+    if (data?.error === "not_owner")  { setMsg({ kind: "err", text: "Seul le propriétaire peut inviter." }); return; }
+    if (data?.error === "invalid_email") { setMsg({ kind: "err", text: "E-mail invalide." }); return; }
+    setEmail("");
+    setMsg({ kind: "ok", text: `✓ ${clean} a été ajouté·e comme collaborateur·rice.` });
+    await reload();
+  }
+
+  async function handleRevoke(userId: string, e: string) {
+    if (!confirm(`Retirer ${e} de ce projet ?`)) return;
+    const { data, error } = await supabase.rpc("revoke_collaborator", { p_project_id: projectId, p_user_id: userId });
+    if (error || data?.error) { setMsg({ kind: "err", text: "Erreur lors du retrait." }); return; }
+    setMsg({ kind: "ok", text: "Collaborateur·rice retiré·e." });
+    await reload();
+  }
+
+  return (
+    <div className="mt-2">
+      <h3 className="text-xs font-semibold text-slate-300 mb-2 uppercase tracking-wider">Collaborateurs</h3>
+      <div className="bg-slate-900/50 border border-slate-700 rounded-xl p-3 space-y-3">
+        {isOwner ? (
+          <>
+            <p className="text-[10px] text-slate-500">
+              Invite une personne à collaborer sur ce projet. Elle doit avoir un compte KidsTime (adresse e-mail identique).
+              Elle aura les mêmes droits que toi sauf : supprimer le projet, gérer les collaborateurs, gérer le lien de partage.
+            </p>
+            <div className="flex gap-2">
+              <input
+                type="email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && handleInvite()}
+                placeholder="prenom.nom@exemple.fr"
+                className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 placeholder:text-slate-600"
+              />
+              <button
+                onClick={handleInvite}
+                disabled={busy || !email.trim()}
+                className={`px-3 py-2 rounded-lg text-xs font-semibold ${busy || !email.trim() ? "bg-slate-800 text-slate-600" : "bg-blue-700 hover:bg-blue-600 text-white"}`}
+              >
+                {busy ? "…" : "Inviter"}
+              </button>
+            </div>
+          </>
+        ) : (
+          <p className="text-[10px] text-slate-500">
+            Seule la personne qui a créé le projet peut ajouter ou retirer des collaborateurs.
+          </p>
+        )}
+
+        {msg && (
+          <div className={`text-[10px] rounded-lg px-2 py-1.5 ${msg.kind === "ok" ? "bg-emerald-950/40 border border-emerald-800/60 text-emerald-300" : "bg-red-950/40 border border-red-800/60 text-red-300"}`}>
+            {msg.text}
+          </div>
+        )}
+
+        <div className="space-y-1">
+          <div className="text-[10px] text-slate-500 uppercase tracking-wider">Membres actuels</div>
+          {loading && <div className="text-xs text-slate-500">Chargement…</div>}
+          {!loading && list.length === 0 && <div className="text-xs text-slate-500">Aucun collaborateur pour l&apos;instant.</div>}
+          {!loading && list.map(c => (
+            <div key={c.user_id} className="flex items-center gap-2 bg-slate-800/40 border border-slate-700 rounded-lg px-2 py-1.5">
+              <span className="text-xs text-white font-mono flex-1 truncate">{c.email}</span>
+              <span className="text-[10px] text-slate-500 whitespace-nowrap">depuis {new Date(c.invited_at).toLocaleDateString("fr-FR")}</span>
+              {isOwner && (
+                <button onClick={() => handleRevoke(c.user_id, c.email)} className="text-[10px] text-red-400 border border-red-800/60 px-2 py-1 rounded-lg">Retirer</button>
+              )}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
