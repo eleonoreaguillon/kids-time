@@ -19,7 +19,7 @@ const KT_QUEUE_KEY = `kt_queue_v${KT_CACHE_V}`;
 
 export type QueueOp =
   | { kind: "day_upsert";     data: { id: string; project_id: string; date: string; child_ids: string[]; sessions: Record<string, Session> } }
-  | { kind: "child_upsert";   data: { id: string; project_id: string; first_name: string; last_name: string; dob: string; vacation_periods: any[]; child_role: string | null; derogations: any[]; school_tracking: boolean; school_period: VacationPeriod | null; archived: boolean } }
+  | { kind: "child_upsert";   data: { id: string; project_id: string; first_name: string; last_name: string; dob: string; vacation_periods: any[]; child_role: string | null; derogations: any[]; school_tracking: boolean; school_periods: VacationPeriod[]; archived: boolean } }
   | { kind: "child_delete";   data: { id: string } }
   | { kind: "group_upsert";   data: { id: string; project_id: string; name: string; child_ids: string[] } }
   | { kind: "group_delete";   data: { id: string } }

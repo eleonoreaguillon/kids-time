@@ -400,7 +400,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     }
   }
 
-  async function addChild(child: { firstName: string; lastName: string; dob: string; vacationPeriods: VacationPeriod[]; role: ChildRole | null; derogations?: Derogation[]; schoolTracking?: boolean; schoolPeriod?: VacationPeriod | null; selectedDates?: string[] }) {
+  async function addChild(child: { firstName: string; lastName: string; dob: string; vacationPeriods: VacationPeriod[]; role: ChildRole | null; derogations?: Derogation[]; schoolTracking?: boolean; schoolPeriods?: VacationPeriod[]; selectedDates?: string[] }) {
     if (!activeProject) return;
     const c: Child = {
       id: newId(),
@@ -412,7 +412,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
       role: child.role ?? undefined,
       derogations: child.derogations || [],
       school_tracking: child.schoolTracking ?? false,
-      school_period: child.schoolPeriod ?? null,
+      school_periods: child.schoolPeriods || [],
       archived: false,
     };
     setActiveAndCache(p => ({ ...p, children: [...p.children, c] }));
@@ -442,7 +442,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
     for (const c of created) await persistChild(c);
   }
 
-  async function updateChild(id: string, data: { firstName: string; lastName: string; dob: string; vacationPeriods: VacationPeriod[]; role: ChildRole | null; derogations?: Derogation[]; schoolTracking?: boolean; schoolPeriod?: VacationPeriod | null; selectedDates?: string[] }) {
+  async function updateChild(id: string, data: { firstName: string; lastName: string; dob: string; vacationPeriods: VacationPeriod[]; role: ChildRole | null; derogations?: Derogation[]; schoolTracking?: boolean; schoolPeriods?: VacationPeriod[]; selectedDates?: string[] }) {
     let updated: Child | null = null;
     setActiveAndCache(p => {
       const children = p.children.map(c => {
@@ -456,7 +456,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
           role: data.role ?? undefined,
           derogations: data.derogations || [],
           school_tracking: data.schoolTracking ?? false,
-          school_period: data.schoolPeriod ?? null,
+          school_periods: data.schoolPeriods || [],
         };
         return updated;
       });
@@ -557,7 +557,7 @@ function MainApp({ session, onSignOut }: { session: any; onSignOut: () => void }
       child_role: (c.role ?? null) as string | null,
       derogations: c.derogations || [],
       school_tracking: !!c.school_tracking,
-      school_period: c.school_period || null,
+      school_periods: c.school_periods || [],
       archived: !!c.archived,
     };
   }
@@ -2354,7 +2354,8 @@ function ChildFormModal({ child, project, onSave, onClose }: { child: Child | nu
   const [derogations, setDerogations] = useState<Derogation[]>(child?.derogations || []);
   const [newDerog, setNewDerog] = useState({ date: "", end_time: "" });
   const [schoolTracking, setSchoolTracking] = useState<boolean>(child?.school_tracking ?? false);
-  const [schoolPeriod, setSchoolPeriod] = useState<VacationPeriod>(child?.school_period || { start: "", end: "" });
+  const [schoolPeriods, setSchoolPeriods] = useState<VacationPeriod[]>(child?.school_periods || []);
+  const [newSchoolPeriod, setNewSchoolPeriod] = useState({ start: "", end: "" });
   const [error, setError] = useState("");
 
   // Dates de tournage : derive l'etat initial du calendrier
@@ -2383,8 +2384,7 @@ function ChildFormModal({ child, project, onSave, onClose }: { child: Child | nu
     if (!fn || !ln) { setError("Le prénom et le nom sont obligatoires."); return; }
     if (!dob) { setError("La date de naissance est obligatoire."); return; }
     setError("");
-    const period = schoolTracking && schoolPeriod.start && schoolPeriod.end ? schoolPeriod : null;
-    onSave({ firstName: fn, lastName: ln, dob, vacationPeriods, role, derogations, schoolTracking, schoolPeriod: period, selectedDates: [...selectedDates] });
+    onSave({ firstName: fn, lastName: ln, dob, vacationPeriods, role, derogations, schoolTracking, schoolPeriods, selectedDates: [...selectedDates] });
   }
 
   return (
@@ -2425,13 +2425,16 @@ function ChildFormModal({ child, project, onSave, onClose }: { child: Child | nu
           </button>
           <div className="text-[10px] text-slate-500">Active le bouton 📚 Suivi scolaire pour cet enfant pendant le tournage. Inclus dans l&apos;amplitude, hors temps de travail et hors pause.</div>
           {schoolTracking && (
-            <div className="flex gap-2 items-end mt-2">
-              <TextInput label="Début" type="date" value={schoolPeriod.start} onChange={e => setSchoolPeriod(p => ({ ...p, start: e.target.value }))} />
-              <TextInput label="Fin" type="date" value={schoolPeriod.end} onChange={e => setSchoolPeriod(p => ({ ...p, end: e.target.value }))} />
-              {(schoolPeriod.start || schoolPeriod.end) && <button onClick={() => setSchoolPeriod({ start: "", end: "" })} className="text-red-400 w-6 h-6 flex items-center justify-center flex-shrink-0" title="Effacer la période">✕</button>}
-            </div>
+            <>
+              {schoolPeriods.map((p, i) => <div key={i} className="flex items-center gap-2 mt-2 text-sm text-slate-300"><span>{p.start} → {p.end}</span><button onClick={() => setSchoolPeriods(v => v.filter((_, j) => j !== i))} className="text-red-400 w-6 h-6 flex items-center justify-center">✕</button></div>)}
+              <div className="flex gap-2 items-end mt-2">
+                <TextInput label="Début" type="date" value={newSchoolPeriod.start} onChange={e => setNewSchoolPeriod(v => ({ ...v, start: e.target.value }))} />
+                <TextInput label="Fin" type="date" value={newSchoolPeriod.end} onChange={e => setNewSchoolPeriod(v => ({ ...v, end: e.target.value }))} />
+                <button onClick={() => { if (newSchoolPeriod.start && newSchoolPeriod.end) { setSchoolPeriods(v => [...v, newSchoolPeriod]); setNewSchoolPeriod({ start: "", end: "" }); } }} className="bg-slate-700 text-white px-3 rounded-lg h-12 text-sm">+</button>
+              </div>
+              <div className="text-[10px] text-slate-500 mt-1">Laisser vide (aucune période ajoutée) pour appliquer sur toute la durée du projet, sinon le bouton 📚 n&apos;apparaîtra que sur les journées comprises dans une des périodes ci-dessus.</div>
+            </>
           )}
-          {schoolTracking && <div className="text-[10px] text-slate-500">Laisser vide pour appliquer sur toute la durée du projet, sinon le bouton 📚 n&apos;apparaîtra que sur les journées comprises dans cette période.</div>}
         </div>
         {/* Dérogations horaires (travail après 20h) */}
         <div>
