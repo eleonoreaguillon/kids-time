@@ -108,8 +108,10 @@ export function detectRole(val: string): ChildRole | null {
   if (n === "role" || n === "rôle") return "role";
   if (n === "silhouette") return "silhouette";
   if (n === "figurant" || n === "figurant.e" || n === "figuration" || n === "figurante") return "figurant";
+  if (n === "doublure") return "doublure";
   if (n.includes("silhouette")) return "silhouette";
   if (n.includes("figurant") || n.includes("figuration")) return "figurant";
+  if (n.includes("doublure")) return "doublure";
   if (n.includes("role") || n.includes("rôle")) return "role";
   return null;
 }
@@ -136,11 +138,11 @@ export function guessColumn(headers: string[], candidates: string[]): string | n
   return null;
 }
 
-// Tri des enfants : Rôle → Silhouette → Figurant → (sans statut), puis alpha
-const ROLE_ORDER: Record<string, number> = { role: 0, silhouette: 1, figurant: 2 };
+// Tri des enfants : Rôle → Silhouette → Figurant → Doublure → (sans statut), puis alpha
+const ROLE_ORDER: Record<string, number> = { role: 0, silhouette: 1, figurant: 2, doublure: 3 };
 export function sortByRoleThenAlpha(cs: Child[]): Child[] {
   return [...cs].sort((a, b) => {
-    const ra = ROLE_ORDER[a.role ?? ""] ?? 3, rb = ROLE_ORDER[b.role ?? ""] ?? 3;
+    const ra = ROLE_ORDER[a.role ?? ""] ?? 4, rb = ROLE_ORDER[b.role ?? ""] ?? 4;
     if (ra !== rb) return ra - rb;
     return `${a.last_name} ${a.first_name}`.localeCompare(`${b.last_name} ${b.first_name}`, "fr");
   });

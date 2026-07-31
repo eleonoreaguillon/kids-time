@@ -19,10 +19,10 @@ const supabase = createClient(
 );
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-const ROLE_ORDER: Record<string, number> = { role: 0, silhouette: 1, figurant: 2 };
+const ROLE_ORDER: Record<string, number> = { role: 0, silhouette: 1, figurant: 2, doublure: 3 };
 function sortByRoleThenAlpha(cs: Child[]): Child[] {
   return [...cs].sort((a, b) => {
-    const ra = ROLE_ORDER[a.role ?? ""] ?? 3, rb = ROLE_ORDER[b.role ?? ""] ?? 3;
+    const ra = ROLE_ORDER[a.role ?? ""] ?? 4, rb = ROLE_ORDER[b.role ?? ""] ?? 4;
     if (ra !== rb) return ra - rb;
     return `${a.last_name} ${a.first_name}`.localeCompare(`${b.last_name} ${b.first_name}`, "fr");
   });
@@ -155,7 +155,7 @@ function ChildrenTab({ project }: { project: Project }) {
   const children = sortByRoleThenAlpha(project.children.filter(c => !c.archived));
   const days = Object.values(project.shootingDays).sort((a, b) => a.date.localeCompare(b.date));
   const roles: (ChildRole | "all")[] = ["all", ...ALL_ROLES];
-  const roleIcons: Record<string, string> = { all: "Tous", role: "Rôle", silhouette: "Silhouette", figurant: "Figurant·e" };
+  const roleIcons: Record<string, string> = { all: "Tous", role: "Rôle", silhouette: "Silhouette", figurant: "Figurant·e", doublure: "Doublure" };
 
   const filtered = children.filter(c => roleFilter === "all" || c.role === roleFilter);
 

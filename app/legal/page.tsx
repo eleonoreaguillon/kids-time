@@ -65,7 +65,7 @@ export default function LegalPage() {
             <p><b>Données collectées</b></p>
             <ul className="list-disc list-inside space-y-1 ml-2">
               <li><b>Compte utilisateur</b> : adresse email (pour l&apos;authentification)</li>
-              <li><b>Enfants comédiens</b> : nom, prénom, date de naissance, statut (rôle / silhouette / figurant), périodes de vacances scolaires, dérogations horaires</li>
+              <li><b>Enfants comédiens</b> : nom, prénom, date de naissance, statut (rôle / silhouette / figurant / doublure), périodes de vacances scolaires, dérogations horaires</li>
               <li><b>Activité de tournage</b> : horaires de convocation, pauses, déjeuner, suivi scolaire éventuel, fin de journée</li>
               <li><b>Liens de partage</b> : token, mot de passe (chiffré en bcrypt), historique des accès (résultat, type d&apos;appareil, horodatage)</li>
             </ul>

@@ -1686,10 +1686,10 @@ export function SelectChildrenForExportModal({ project, rangeLabel, onConfirm, o
     return hay.includes(q) || hay2.includes(q);
   });
   type SectionKey = ChildRole | "none";
-  const buckets: Record<SectionKey, Child[]> = { role: [], silhouette: [], figurant: [], none: [] };
+  const buckets: Record<SectionKey, Child[]> = { role: [], silhouette: [], figurant: [], doublure: [], none: [] };
   for (const c of filtered) buckets[(c.role || "none") as SectionKey].push(c);
-  const order: SectionKey[] = ["role", "silhouette", "figurant", "none"];
-  const labels: Record<SectionKey, string> = { role: "Rôle", silhouette: "Silhouette", figurant: "Figurant·e", none: "Sans statut" };
+  const order: SectionKey[] = ["role", "silhouette", "figurant", "doublure", "none"];
+  const labels: Record<SectionKey, string> = { role: "Rôle", silhouette: "Silhouette", figurant: "Figurant·e", doublure: "Doublure", none: "Sans statut" };
   const sections = order.filter(k => buckets[k].length > 0).map(k => ({ key: k, label: labels[k], children: buckets[k] }));
 
   function toggle(id: string) { setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }); }
@@ -1875,7 +1875,7 @@ function ChildrenTab({ project, onAdd, onEdit, onRemove, onImport, onArchive, on
   function downloadTemplate() {
     // Une ligne d'exemple bien remplie, une ligne minimale, pour montrer ce qui est optionnel.
     const csv =
-      "Prénom;Nom;Date de naissance (JJ/MM/AAAA);Statut (role/silhouette/figurant);Début vacances (JJ/MM/AAAA);Fin vacances (JJ/MM/AAAA);Suivi scolaire (oui/non)\n" +
+      "Prénom;Nom;Date de naissance (JJ/MM/AAAA);Statut (role/silhouette/figurant/doublure);Début vacances (JJ/MM/AAAA);Fin vacances (JJ/MM/AAAA);Suivi scolaire (oui/non)\n" +
       "Léa;Martin;15/03/2015;role;01/07/2025;31/08/2025;oui\n" +
       "Tom;Dupont;08/11/2012;silhouette;;;non\n";
     const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
@@ -2596,10 +2596,10 @@ function ManageChildrenList({ project, childIds, onToggleChild, onPendingUncheck
   // Regroupe par statut
   type SectionKey = ChildRole | "none";
   const sections: { key: SectionKey; label: string; children: Child[] }[] = [];
-  const buckets: Record<SectionKey, Child[]> = { role: [], silhouette: [], figurant: [], none: [] };
+  const buckets: Record<SectionKey, Child[]> = { role: [], silhouette: [], figurant: [], doublure: [], none: [] };
   for (const c of filtered) buckets[(c.role || "none") as SectionKey].push(c);
-  const order: SectionKey[] = ["role", "silhouette", "figurant", "none"];
-  const labels: Record<SectionKey, string> = { role: "Rôle", silhouette: "Silhouette", figurant: "Figurant·e", none: "Sans statut" };
+  const order: SectionKey[] = ["role", "silhouette", "figurant", "doublure", "none"];
+  const labels: Record<SectionKey, string> = { role: "Rôle", silhouette: "Silhouette", figurant: "Figurant·e", doublure: "Doublure", none: "Sans statut" };
   for (const k of order) if (buckets[k].length > 0) sections.push({ key: k, label: labels[k], children: buckets[k] });
 
   const totalSelected = active.filter(c => childIds.includes(c.id)).length;
