@@ -4,7 +4,7 @@
 
 export type Period = "school" | "vacation";
 export type AgeBand = "0-2" | "3-5" | "6-11" | "12-16" | "16-18";
-export type ChildRole = "role" | "silhouette" | "figurant";
+export type ChildRole = "role" | "silhouette" | "figurant" | "doublure";
 
 export interface Rules {
   maxWorkMinutes: Record<AgeBand, Record<Period, number>>;
@@ -140,10 +140,11 @@ export const DEFAULT_NIGHT_LIMIT_BY_BAND: Record<AgeBand, string> = {
   "16-18": "22:00",
 };
 
-export const ROLE_LABELS: Record<ChildRole, string> = { role: "Rôle", silhouette: "Silhouette", figurant: "Figurant·e" };
+export const ROLE_LABELS: Record<ChildRole, string> = { role: "Rôle", silhouette: "Silhouette", figurant: "Figurant·e", doublure: "Doublure" };
 export const ROLE_COLORS: Record<ChildRole, string> = {
   role:       "bg-purple-900/40 text-purple-300 border-purple-700",
   silhouette: "bg-cyan-900/40 text-cyan-300 border-cyan-700",
   figurant:   "bg-orange-900/40 text-orange-300 border-orange-700",
+  doublure:   "bg-pink-900/40 text-pink-300 border-pink-700",
 };
-export const ALL_ROLES: ChildRole[] = ["role", "silhouette", "figurant"];
+export const ALL_ROLES: ChildRole[] = ["role", "silhouette", "figurant", "doublure"];
