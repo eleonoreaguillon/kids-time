@@ -76,6 +76,9 @@ export interface Project {
   share_token?: string | null;
   /** Indique seulement si un mot de passe est defini, jamais sa valeur. */
   share_password_set?: boolean;
+  /** true si l utilisateur courant est le proprietaire du projet (par
+   *  opposition a un collaborateur). Derive apres le chargement. */
+  is_owner?: boolean;
 }
 
 export interface SessionStats {
