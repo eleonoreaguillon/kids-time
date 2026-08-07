@@ -8,6 +8,7 @@ import {
   type AgeBand,
   type Child,
   type ChildRole,
+  type Project,
   type Rules,
   type Session,
   type SessionStats,
@@ -195,4 +196,26 @@ export function computeSessionStats(session: Session | undefined, rules: Rules):
     timeSinceBreak = Math.floor((now.getTime() - new Date(last ? last.time : session.start_time).getTime()) / 60000);
   }
   return { amplitudeMin, workMin, breakMin, validBreakMin, dejeunerMin, schoolMin, timeSinceBreak, start, now, breakSlots };
+}
+
+// Date de la derniere journee de tournage enregistree pour cet enfant AVANT
+// dateStr (jour ouvre precedent pour cet enfant, pas forcement la veille
+// calendaire). Retourne null s'il n'y en a pas.
+export function findPreviousShootingDate(project: Project, childId: string, dateStr: string): string | null {
+  const dates = Object.keys(project.shootingDays)
+    .filter(d => d < dateStr && (project.shootingDays[d]?.child_ids || []).includes(childId))
+    .sort();
+  return dates.length > 0 ? dates[dates.length - 1] : null;
+}
+
+// Repos (en minutes) entre la fin de la session precedente de cet enfant et
+// le debut de sa session du jour donne. Retourne null si pas de jour
+// precedent avec une heure de fin enregistree, ou pas de debut aujourd'hui.
+export function computeRestBeforeMinutes(project: Project, childId: string, dateStr: string, todayStart: string | undefined): number | null {
+  if (!todayStart) return null;
+  const prevDate = findPreviousShootingDate(project, childId, dateStr);
+  if (!prevDate) return null;
+  const prevEnd = project.shootingDays[prevDate]?.sessions?.[childId]?.end_time;
+  if (!prevEnd) return null;
+  return Math.floor((new Date(todayStart).getTime() - new Date(prevEnd).getTime()) / 60000);
 }
