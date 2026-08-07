@@ -7,6 +7,7 @@
 import {
   AGE_BAND_LABELS,
   ALL_ROLES,
+  MIN_DAILY_REST_BY_BAND,
   ROLE_LABELS,
   type Child,
   type ChildRole,
@@ -45,7 +46,7 @@ export function buildExportRows(project: Project, dateStr: string) {
     const stats = computeSessionStats(session, project.rules);
     const workOver = stats ? Math.max(0, stats.workMin - maxWork) : 0;
     const ampOver = stats ? Math.max(0, stats.amplitudeMin - maxAmp) : 0;
-    const minRest = project.rules.minRestBetweenDays;
+    const minRest = MIN_DAILY_REST_BY_BAND[band];
     const restBeforeMin = computeRestBeforeMinutes(project, childId, dateStr, session?.start_time);
     const restShort = restBeforeMin != null && restBeforeMin < minRest;
     const breakSlotsStr = stats?.breakSlots.filter(b => b.valid && b.kind === "pause").map(b => `${formatTime(b.start)}-${formatTime(b.end)} (${formatMinutes(b.durationMin)})`).join(" / ") || "--";
@@ -253,7 +254,7 @@ export function exportChildAllDays(project: Project, child: Child, dateRanges?: 
     const stats = computeSessionStats(session, project.rules);
     const workOver = stats ? Math.max(0, stats.workMin - maxWork) : 0;
     const ampOver = stats ? Math.max(0, stats.amplitudeMin - maxAmp) : 0;
-    const minRest = project.rules.minRestBetweenDays;
+    const minRest = MIN_DAILY_REST_BY_BAND[band];
     const restBeforeMin = computeRestBeforeMinutes(project, child.id, dateStr, session?.start_time);
     const restShort = restBeforeMin != null && restBeforeMin < minRest;
     const bStr = stats?.breakSlots.filter(b => b.valid && b.kind === "pause").map((b) => `${formatTime(b.start)}-${formatTime(b.end)} (${formatMinutes(b.durationMin)})`).join(", ") || "--";
@@ -357,9 +358,8 @@ export function exportProjectGlobalPDF(project: Project, selectedIds?: string[],
   <h2>${project.name} · Généré le ${new Date().toLocaleDateString("fr-FR")}</h2>`;
 
   for (const child of sortByRoleThenAlpha(project.children.filter(c => !c.archived && (!filterSet || filterSet.has(c.id))))) {
-    type DayData = { inDay: boolean; session?: Session; vacation: boolean; maxWork: number; maxAmp: number; stats: SessionStats | null; restBeforeMin: number | null };
+    type DayData = { inDay: boolean; session?: Session; vacation: boolean; maxWork: number; maxAmp: number; stats: SessionStats | null; restBeforeMin: number | null; minRest: number };
     const dd: Record<string, DayData> = {};
-    const minRest = project.rules.minRestBetweenDays;
     for (const dateStr of sortedDates) {
       const day = project.shootingDays[dateStr];
       const inDay = (day.child_ids || []).includes(child.id);
@@ -373,6 +373,7 @@ export function exportProjectGlobalPDF(project: Project, selectedIds?: string[],
         maxAmp: project.rules.maxAmplitudeMinutes,
         stats: inDay ? computeSessionStats(session, project.rules) : null,
         restBeforeMin: inDay ? computeRestBeforeMinutes(project, child.id, dateStr, session?.start_time) : null,
+        minRest: MIN_DAILY_REST_BY_BAND[band],
       };
     }
     const childDates = sortedDates.filter(d => dd[d].inDay);
@@ -425,7 +426,7 @@ export function exportProjectGlobalPDF(project: Project, selectedIds?: string[],
         <tr>
           <td ${TDL} style="text-align:left;padding:3px 6px;border:1px solid #ccc;font-size:8px;background:#fff5f5;color:#dc2626;white-space:nowrap">Repos insuffisant depuis la veille</td>
           <td ${TDT()}></td>
-          ${cells(d => { if (d.restBeforeMin == null) return ""; const short = d.restBeforeMin < minRest; return short ? `<span class="over">🚫 ${fmtHHMM(d.restBeforeMin)}</span>` : fmtHHMM(d.restBeforeMin); })}
+          ${cells(d => { if (d.restBeforeMin == null) return ""; const short = d.restBeforeMin < d.minRest; return short ? `<span class="over">🚫 ${fmtHHMM(d.restBeforeMin)}</span>` : fmtHHMM(d.restBeforeMin); })}
         </tr>
         <tr><td ${TDL}>Durée de pause déjeuner</td><td ${TDT()}></td>${cells(d => fmtHHMM(d.stats?.dejeunerMin ?? 0))}</tr>
         <tr><td ${TDL}>Durée des autres pauses</td><td ${TDT()}></td>${cells(d => fmtHHMM(d.stats?.validBreakMin ?? 0))}</tr>

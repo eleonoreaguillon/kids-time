@@ -2295,7 +2295,7 @@ function SettingsTab({ rules, onUpdateRules, project, onRename, onDelete, isOwne
 
       <h2 className="font-bold text-base mb-1" style={{ fontFamily: "Syne, sans-serif" }}>Paramètres DRIEETS</h2>
       <div className="space-y-2">
-        {([["Amplitude max", "maxAmplitudeMinutes", 60, 720, 30], ["Pause minimum", "minBreakMinutes", 5, 60, 1], ["Repos minimum entre 2 journées", "minRestBetweenDays", 480, 1440, 30]] as const).map(([label, key, min, max, step]) => (
+        {([["Amplitude max", "maxAmplitudeMinutes", 60, 720, 30], ["Pause minimum", "minBreakMinutes", 5, 60, 1]] as const).map(([label, key, min, max, step]) => (
           <div key={key} className="bg-slate-900/50 border border-slate-700 rounded-xl p-3 flex items-center justify-between">
             <div className="text-sm text-white">{label}</div>
             <div className="flex items-center gap-2">
@@ -2323,6 +2323,16 @@ function SettingsTab({ rules, onUpdateRules, project, onRename, onDelete, isOwne
           ))}</div>
         </div>
       ))}
+      <div>
+        <h3 className="text-xs font-semibold text-slate-300 mb-2 uppercase tracking-wider">Repos minimum entre 2 journées</h3>
+        <div className="space-y-2">{AGE_BANDS.map(band => (
+          <div key={band} className="bg-slate-900/50 border border-slate-700 rounded-xl p-3 flex items-center justify-between">
+            <div className="font-semibold text-white text-xs">{BL[band]}</div>
+            <div className="bg-slate-800/80 border border-slate-700 rounded-lg px-2 py-1.5 text-slate-400 text-xs font-mono text-center">{formatMinutes(MIN_DAILY_REST_BY_BAND[band])}</div>
+          </div>
+        ))}</div>
+        <div className="text-[10px] text-slate-500 mt-1">Obligation légale (DRIEETS), non modifiable.</div>
+      </div>
 
       {/* Options d'export */}
       <div className="mt-2">
@@ -3028,7 +3038,7 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
               const isExpanded = expandedId === id;
               const restBeforeMin = computeRestBeforeMinutes(project, id, dateStr, session?.start_time);
               return <ChildCard key={id} child={child} session={session} stats={stats} maxWork={maxWork} breakAfter={breakAfter} maxAmplitude={rules.maxAmplitudeMinutes} vacation={vacation}
-                restBeforeMin={restBeforeMin} minRest={rules.minRestBetweenDays}
+                restBeforeMin={restBeforeMin} minRest={MIN_DAILY_REST_BY_BAND[band]}
                 isSelected={selected.has(id)} onSelect={() => toggleSelect(id)}
                 isExpanded={isExpanded} onToggleExpand={() => setExpandedId(isExpanded ? null : id)}
                 onStart={(t, kind) => onStartSession(id, t, kind)} onCancelSession={() => onCancelSession(id)}
