@@ -10,7 +10,7 @@ import {
   type ShootingDay, type VacationPeriod,
 } from "@/lib/types";
 import {
-  computeSessionStats, detectRole, formatMinutes, formatTime, getAge, getAgeBand,
+  computeRestBeforeMinutes, computeSessionStats, detectRole, formatMinutes, formatTime, getAge, getAgeBand,
   guessColumn, isMinor, isSchoolTrackingActive, isVacation, isoToTimeStr, normalize, normalizeRules, nowISO,
   parseExcelDate, sortByRoleThenAlpha, splitFullName, timeStrToISO, todayStr,
 } from "@/lib/helpers";
@@ -25,7 +25,7 @@ import {
 // Re-export pour conserver les imports externes (app/share/[token]/page.tsx)
 export {
   AGE_BAND_LABELS, ALL_ROLES, ROLE_COLORS, ROLE_LABELS,
-  computeSessionStats, formatMinutes, formatTime, getAge, getAgeBand, isMinor,
+  computeRestBeforeMinutes, computeSessionStats, formatMinutes, formatTime, getAge, getAgeBand, isMinor,
   isSchoolTrackingActive, isVacation, normalizeRules, sortByRoleThenAlpha,
   buildExportRows, exportChildAllDays, exportDayToPDF, exportProjectGlobalPDF,
 };
@@ -2295,7 +2295,7 @@ function SettingsTab({ rules, onUpdateRules, project, onRename, onDelete, isOwne
 
       <h2 className="font-bold text-base mb-1" style={{ fontFamily: "Syne, sans-serif" }}>Paramètres DRIEETS</h2>
       <div className="space-y-2">
-        {([["Amplitude max", "maxAmplitudeMinutes", 60, 720, 30], ["Pause minimum", "minBreakMinutes", 5, 60, 1]] as const).map(([label, key, min, max, step]) => (
+        {([["Amplitude max", "maxAmplitudeMinutes", 60, 720, 30], ["Pause minimum", "minBreakMinutes", 5, 60, 1], ["Repos minimum entre 2 journées", "minRestBetweenDays", 480, 1440, 30]] as const).map(([label, key, min, max, step]) => (
           <div key={key} className="bg-slate-900/50 border border-slate-700 rounded-xl p-3 flex items-center justify-between">
             <div className="text-sm text-white">{label}</div>
             <div className="flex items-center gap-2">
@@ -3026,7 +3026,9 @@ function ShootingView({ project, dateStr, onBack, onStartSessions, onStartSessio
               const maxWork = rules.maxWorkMinutes[band][period]; const breakAfter = rules.mandatoryBreakAfterMinutes[band][period];
               const stats = computeSessionStats(session, rules);
               const isExpanded = expandedId === id;
+              const restBeforeMin = computeRestBeforeMinutes(project, id, dateStr, session?.start_time);
               return <ChildCard key={id} child={child} session={session} stats={stats} maxWork={maxWork} breakAfter={breakAfter} maxAmplitude={rules.maxAmplitudeMinutes} vacation={vacation}
+                restBeforeMin={restBeforeMin} minRest={rules.minRestBetweenDays}
                 isSelected={selected.has(id)} onSelect={() => toggleSelect(id)}
                 isExpanded={isExpanded} onToggleExpand={() => setExpandedId(isExpanded ? null : id)}
                 onStart={(t, kind) => onStartSession(id, t, kind)} onCancelSession={() => onCancelSession(id)}
@@ -3186,9 +3188,11 @@ function SingleStartButton({ onStart, dateStr, schoolAvailable }: { onStart: (t?
 }
 
 // Fix #1: compact ChildCard with expand/collapse
-function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, vacation, isSelected, onSelect, isExpanded, onToggleExpand, onStart, onCancelSession, onCancelLastEvent, onReopenSession, onEditEventTime, onEditEventType, onDeleteEvent, onEditStartTime, onEditEndTime, onApplyEvent, onResumeAs, onTransitionOne, onEndSession, dateStr }: {
+function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, vacation, restBeforeMin, minRest, isSelected, onSelect, isExpanded, onToggleExpand, onStart, onCancelSession, onCancelLastEvent, onReopenSession, onEditEventTime, onEditEventType, onDeleteEvent, onEditStartTime, onEditEndTime, onApplyEvent, onResumeAs, onTransitionOne, onEndSession, dateStr }: {
   child: Child; session: Session | undefined; stats: SessionStats | null;
   maxWork: number; breakAfter: number; maxAmplitude: number; vacation: boolean;
+  /** Repos (minutes) depuis la fin de la derniere journee de cet enfant ; null si pas de jour precedent connu. */
+  restBeforeMin: number | null; minRest: number;
   isSelected: boolean; onSelect: () => void;
   isExpanded: boolean; onToggleExpand: () => void;
   onStart: (t?: string, kind?: "travail" | "dejeuner" | "school") => void; onCancelSession: () => void; onCancelLastEvent: () => void; onReopenSession: () => void;
@@ -3220,6 +3224,9 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
   const limitDate = new Date(`${dateStr}T${limitTimeStr}:00`);
   const pastTimeLimit = session?.start_time != null && session.status !== "done" && new Date() >= limitDate;
 
+  // Alerte repos insuffisant depuis la journee de tournage precedente de cet enfant
+  const restCrit = restBeforeMin != null && restBeforeMin < minRest;
+
   function startEdit(key: number | "start" | "end", iso: string | undefined) { setEditingIdx(key); setEditTime(isoToTimeStr(iso)); }
   function confirmEdit() {
     const iso = timeStrToISO(dateStr, editTime);
@@ -3228,7 +3235,7 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
   }
   const events = session?.events || [];
 
-  const statusColor = session?.status === "working" ? "border-emerald-700" : session?.status === "paused" ? "border-amber-600" : session?.status === "dejeuner" ? "border-orange-500" : session?.status === "school" ? "border-indigo-600" : session?.status === "done" ? "border-slate-600" : workCrit || ampCrit ? "border-red-700" : ampWarn ? "border-orange-500" : pastTimeLimit ? "border-orange-600" : breakDue ? "border-amber-600" : "border-slate-700";
+  const statusColor = session?.status === "working" ? "border-emerald-700" : session?.status === "paused" ? "border-amber-600" : session?.status === "dejeuner" ? "border-orange-500" : session?.status === "school" ? "border-indigo-600" : session?.status === "done" ? "border-slate-600" : workCrit || ampCrit || restCrit ? "border-red-700" : ampWarn ? "border-orange-500" : pastTimeLimit ? "border-orange-600" : breakDue ? "border-amber-600" : "border-slate-700";
 
   return (
     <div className={`rounded-xl border transition-all ${isSelected ? "border-blue-500 bg-blue-950/20" : statusColor + " bg-slate-900/50"}`}>
@@ -3253,6 +3260,7 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
             {ampWarn && !ampCrit && <span className="text-[10px] text-orange-400">⚠️ Ampl.</span>}
             {breakDue && !workCrit && <span className="text-[10px] text-amber-400">⚠️ Pause</span>}
             {pastTimeLimit && <span className="text-[10px] text-orange-400">🕗 {limitTimeStr} dépassé</span>}
+            {restCrit && <span className="text-[10px] text-red-400">🚫 Repos</span>}
           </div>
         </div>
         {/* Mini progress bars */}
@@ -3289,6 +3297,7 @@ function ChildCard({ child, session, stats, maxWork, breakAfter, maxAmplitude, v
               {ampWarn && !ampCrit && <div className="bg-orange-900/30 border border-orange-600 rounded-lg px-3 py-2 text-xs text-orange-300">⚠️ Amplitude maximale atteinte</div>}
               {ampCrit && <div className="bg-red-900/30 border border-red-700 rounded-lg px-3 py-2 text-xs text-red-300">🚫 Amplitude maximale dépassée</div>}
               {pastTimeLimit && <div className="bg-orange-900/30 border border-orange-600 rounded-lg px-3 py-2 text-xs text-orange-300">🕗 Limite horaire {limitTimeStr} dépassée{derogation ? " (dérogation)" : ""}</div>}
+              {restCrit && <div className="bg-red-900/30 border border-red-700 rounded-lg px-3 py-2 text-xs text-red-300">🚫 Repos insuffisant depuis la journée précédente — {formatMinutes(restBeforeMin!)} au lieu de {formatMinutes(minRest)} minimum</div>}
 
               {/* Bouton d'action individuel unifie */}
               {session?.status !== "done" && session?.start_time && (

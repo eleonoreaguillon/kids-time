@@ -40,7 +40,7 @@ function normalizeProject(data: any): Project {
 
 // ─── Per-child detail card (mirrors the host ChildCard info) ──────────────────
 function ChildDetailRow({ row, dateStr }: { row: any; dateStr: string }) {
-  const { _child: child, _session: session, _stats: stats, _maxWork: maxWork, _maxAmp: maxAmp, _vacation: vacation, _band: band } = row;
+  const { _child: child, _session: session, _stats: stats, _maxWork: maxWork, _maxAmp: maxAmp, _vacation: vacation, _band: band, _restBeforeMin: restBeforeMin, _restShort: restShort } = row;
   const role = child.role as ChildRole | undefined;
   const workOver = stats ? Math.max(0, stats.workMin - maxWork) : 0;
   const ampOver = stats ? Math.max(0, stats.amplitudeMin - maxAmp) : 0;
@@ -68,10 +68,11 @@ function ChildDetailRow({ row, dateStr }: { row: any; dateStr: string }) {
             <div className="text-slate-400">Pauses valides <span className="text-green-300 font-mono">{formatMinutes(stats.validBreakMin)}</span></div>
             {(isSchoolTrackingActive(child, dateStr) || stats.schoolMin > 0) && <div className="text-slate-400">📚 Suivi scolaire <span className="text-indigo-300 font-mono">{formatMinutes(stats.schoolMin)}</span></div>}
           </div>
-          {(workOver > 0 || ampOver > 0) && (
+          {(workOver > 0 || ampOver > 0 || restShort) && (
             <div className="flex gap-2 flex-wrap pt-1">
               {workOver > 0 && <span className="text-[10px] bg-red-900/40 border border-red-700 text-red-300 px-2 py-0.5 rounded-full">🚫 Dépass. travail {formatMinutes(workOver)}</span>}
               {ampOver > 0 && <span className="text-[10px] bg-red-900/40 border border-red-700 text-red-300 px-2 py-0.5 rounded-full">🚫 Dépass. amplitude {formatMinutes(ampOver)}</span>}
+              {restShort && <span className="text-[10px] bg-red-900/40 border border-red-700 text-red-300 px-2 py-0.5 rounded-full">🚫 Repos insuffisant {formatMinutes(restBeforeMin)}</span>}
             </div>
           )}
           {dejeunerSlots.length > 0 && (
