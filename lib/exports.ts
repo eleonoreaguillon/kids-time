@@ -423,11 +423,7 @@ export function exportProjectGlobalPDF(project: Project, selectedIds?: string[],
       </thead>
       <tbody>
         <tr><td ${TDL}>Heure de convocation</td><td ${TDT()}></td>${cells(d => d.session?.start_time ? formatTime(d.session.start_time) : "")}</tr>
-        <tr>
-          <td ${TDL} style="text-align:left;padding:3px 6px;border:1px solid #ccc;font-size:8px;background:#fff5f5;color:#dc2626;white-space:nowrap">Repos insuffisant depuis la veille</td>
-          <td ${TDT()}></td>
-          ${cells(d => { if (d.restBeforeMin == null) return ""; const short = d.restBeforeMin < d.minRest; return short ? `<span class="over">🚫 ${fmtHHMM(d.restBeforeMin)}</span>` : fmtHHMM(d.restBeforeMin); })}
-        </tr>
+        <tr><td ${TDL}>Repos depuis la veille</td><td ${TDT()}></td>${cells(d => { if (d.restBeforeMin == null) return ""; const short = d.restBeforeMin < d.minRest; return short ? `<span class="over">🚫 ${fmtHHMM(d.restBeforeMin)}</span>` : fmtHHMM(d.restBeforeMin); })}</tr>
         <tr><td ${TDL}>Durée de pause déjeuner</td><td ${TDT()}></td>${cells(d => fmtHHMM(d.stats?.dejeunerMin ?? 0))}</tr>
         <tr><td ${TDL}>Durée des autres pauses</td><td ${TDT()}></td>${cells(d => fmtHHMM(d.stats?.validBreakMin ?? 0))}</tr>
         ${childDates.some(d => isSchoolTrackingActive(child, d)) || totSchool > 0 ? `<tr><td ${TDL}>Suivi scolaire</td><td ${TDT()}>${fmtHHMM(totSchool)}</td>${cells(d => fmtHHMM(d.stats?.schoolMin ?? 0))}</tr>` : ""}
